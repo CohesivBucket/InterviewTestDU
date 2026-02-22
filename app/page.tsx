@@ -126,18 +126,137 @@ function TaskCard({
   task,
   onStatusChange,
   onDelete,
+  onEdit,
   t: theme,
 }: {
   task: Task;
   onStatusChange: (id: string, status: Status) => void;
   onDelete: (id: string) => void;
+  onEdit: (id: string, updates: Partial<Task>) => void;
   t: typeof DARK;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(task.title);
+  const [editPriority, setEditPriority] = useState<Priority>(task.priority);
+  const [editStatus, setEditStatus] = useState<Status>(task.status);
+  const [editDueDate, setEditDueDate] = useState(task.dueDate ?? "");
   const overdue = isOverdue(task);
   const done = task.status === "done";
 
+  const startEditing = () => {
+    setEditTitle(task.title);
+    setEditPriority(task.priority);
+    setEditStatus(task.status);
+    setEditDueDate(task.dueDate ?? "");
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    const updates: Partial<Task> = {};
+    if (editTitle.trim() && editTitle !== task.title) updates.title = editTitle.trim();
+    if (editPriority !== task.priority) updates.priority = editPriority;
+    if (editStatus !== task.status) updates.status = editStatus;
+    const newDue = editDueDate || null;
+    if (newDue !== (task.dueDate ?? null)) updates.dueDate = newDue;
+    if (Object.keys(updates).length > 0) onEdit(task.id, updates);
+    setEditing(false);
+  };
+
+  const cancelEdit = () => setEditing(false);
+
+  // ── Edit mode ──
+  if (editing) {
+    return (
+      <div
+        style={{
+          background: theme.cardHover,
+          border: `1px solid ${theme.accent}`,
+          borderLeft: `3px solid ${PRIORITY_COLOR[editPriority]}`,
+          borderRadius: "10px",
+          padding: "12px 14px",
+          marginBottom: "8px",
+          transition: "all 0.15s ease",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Title input */}
+        <input
+          value={editTitle}
+          onChange={e => setEditTitle(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+          autoFocus
+          style={{
+            width: "100%", background: theme.inputBg, border: `1px solid ${theme.border}`,
+            borderRadius: "6px", padding: "7px 10px", color: theme.text, fontSize: "13px",
+            fontFamily: "'Syne', sans-serif", marginBottom: "8px",
+          }}
+        />
+
+        {/* Priority toggles */}
+        <div style={{ marginBottom: "6px" }}>
+          <div style={{ fontSize: "9px", fontFamily: "monospace", color: theme.textMuted, marginBottom: "4px", letterSpacing: "0.1em" }}>PRIORITY</div>
+          <div style={{ display: "flex", gap: "4px" }}>
+            {(["low", "medium", "high"] as Priority[]).map(p => (
+              <button key={p} onClick={() => setEditPriority(p)} style={{
+                flex: 1, padding: "4px 0", borderRadius: "5px", border: `1.5px solid ${editPriority === p ? PRIORITY_COLOR[p] : theme.border}`,
+                background: editPriority === p ? PRIORITY_BG[p] : "transparent",
+                color: editPriority === p ? PRIORITY_COLOR[p] : theme.textMuted,
+                fontSize: "10px", fontWeight: 700, fontFamily: "monospace", cursor: "pointer", letterSpacing: "0.05em", transition: "all 0.12s",
+              }}>{p.toUpperCase()}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Status toggles */}
+        <div style={{ marginBottom: "6px" }}>
+          <div style={{ fontSize: "9px", fontFamily: "monospace", color: theme.textMuted, marginBottom: "4px", letterSpacing: "0.1em" }}>STATUS</div>
+          <div style={{ display: "flex", gap: "4px" }}>
+            {([["todo", "Todo", "#a78bfa"], ["in_progress", "Active", "#fbbf24"], ["done", "Done", "#34d399"]] as [Status, string, string][]).map(([s, label, color]) => (
+              <button key={s} onClick={() => setEditStatus(s)} style={{
+                flex: 1, padding: "4px 0", borderRadius: "5px", border: `1.5px solid ${editStatus === s ? color : theme.border}`,
+                background: editStatus === s ? `${color}18` : "transparent",
+                color: editStatus === s ? color : theme.textMuted,
+                fontSize: "10px", fontWeight: 700, fontFamily: "monospace", cursor: "pointer", letterSpacing: "0.05em", transition: "all 0.12s",
+              }}>{label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Due date */}
+        <div style={{ marginBottom: "8px" }}>
+          <div style={{ fontSize: "9px", fontFamily: "monospace", color: theme.textMuted, marginBottom: "4px", letterSpacing: "0.1em" }}>DUE DATE</div>
+          <input
+            type="date"
+            value={editDueDate}
+            onChange={e => setEditDueDate(e.target.value)}
+            style={{
+              width: "100%", background: theme.inputBg, border: `1px solid ${theme.border}`,
+              borderRadius: "6px", padding: "5px 8px", color: theme.text, fontSize: "11px",
+              fontFamily: "'DM Mono', monospace", colorScheme: theme === DARK ? "dark" : "light",
+            }}
+          />
+        </div>
+
+        {/* Save / Cancel */}
+        <div style={{ display: "flex", gap: "6px" }}>
+          <button onClick={saveEdit} style={{
+            flex: 1, padding: "6px 0", borderRadius: "6px", border: "none",
+            background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "#fff",
+            fontSize: "11px", fontWeight: 700, fontFamily: "'Syne', sans-serif", cursor: "pointer", transition: "all 0.15s",
+          }}>Save</button>
+          <button onClick={cancelEdit} style={{
+            flex: 1, padding: "6px 0", borderRadius: "6px", border: `1px solid ${theme.border}`,
+            background: "transparent", color: theme.textMuted,
+            fontSize: "11px", fontWeight: 600, fontFamily: "'Syne', sans-serif", cursor: "pointer", transition: "all 0.15s",
+          }}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Normal view ──
   return (
     <div
       onClick={() => setExpanded(!expanded)}
@@ -179,12 +298,20 @@ function TaskCard({
           }}>{task.title}</div>
           {task.dueDate && (
             <div style={{ fontSize: "11px", color: overdue ? "#f87171" : theme.textMuted, marginTop: "4px", fontFamily: "monospace" }}>
-              📅 {formatDate(task.dueDate)}
+              {formatDate(task.dueDate)}
             </div>
           )}
         </div>
 
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+          {/* Edit button */}
+          <button
+            onClick={startEditing}
+            title="Edit task"
+            style={{ width: "26px", height: "26px", borderRadius: "50%", border: "1.5px solid rgba(139,92,246,0.4)", background: "transparent", cursor: "pointer", color: "#a78bfa", fontSize: "11px", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(139,92,246,0.15)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+          >✎</button>
           {!done && (
             <button
               onClick={() => onStatusChange(task.id, "done")}
@@ -275,6 +402,15 @@ export default function Home() {
   const handleDelete = async (id: string) => {
     setTasks(prev => prev.filter(t => t.id !== id));
     await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+  };
+
+  const handleEdit = async (id: string, updates: Partial<Task>) => {
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    await fetch(`/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
   };
 
   // ── Chat ───────────────────────────────────────────────────────────────────
@@ -457,7 +593,7 @@ export default function Home() {
                 </div>
               </div>
             ) : filtered.map(t => (
-              <TaskCard key={t.id} task={t} onStatusChange={handleStatusChange} onDelete={handleDelete} t={T} />
+              <TaskCard key={t.id} task={t} onStatusChange={handleStatusChange} onDelete={handleDelete} onEdit={handleEdit} t={T} />
             ))}
           </div>
         </div>
@@ -604,7 +740,7 @@ export default function Home() {
               >↑</button>
             </form>
             <div style={{ marginTop: "8px", textAlign: "center", fontSize: "10px", fontFamily: "'DM Mono', monospace", color: T.textFaint }}>
-              Enter to send · Click tasks to expand · ✓ complete · ▶ start · × delete
+              Enter to send · ✎ edit · ✓ complete · ▶ start · × delete
             </div>
           </div>
         </div>
