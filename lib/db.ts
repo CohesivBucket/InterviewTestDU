@@ -1,45 +1,25 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { eq, and, lt, or, like, desc, asc } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
-export const tasks = sqliteTable("tasks", {
-  id: text("id").primaryKey(),
-  title: text("title").notNull(),
-  description: text("description"),
-  priority: text("priority", { enum: ["low", "medium", "high"] }).notNull().default("medium"),
-  status: text("status", { enum: ["todo", "in_progress", "done"] }).notNull().default("todo"),
-  dueDate: text("due_date"),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+// ─── Task type ─────────────────────────────────────────────────────────────────
 
-export type Task = typeof tasks.$inferSelect;
+export type Task = {
+  id: string;
+  title: string;
+  description: string | null;
+  priority: "low" | "medium" | "high";
+  status: "todo" | "in_progress" | "done";
+  dueDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
-let _db: ReturnType<typeof drizzle> | null = null;
+// ─── In-memory store (works on Vercel serverless + local dev) ──────────────────
 
-function getDb() {
-  if (_db) return _db;
-  const sqlite = new Database("./tasks.db");
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      priority TEXT NOT NULL DEFAULT 'medium',
-      status TEXT NOT NULL DEFAULT 'todo',
-      due_date TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
-  _db = drizzle(sqlite, { schema: { tasks } });
-  return _db;
-}
+const store: Map<string, Task> = new Map();
 
 const now = () => new Date().toISOString();
+
+// ─── Date parser ───────────────────────────────────────────────────────────────
 
 export function parseDate(s: string): string {
   const today = new Date();
@@ -66,55 +46,101 @@ export function parseDate(s: string): string {
   return isNaN(parsed.getTime()) ? s : parsed.toISOString().split("T")[0];
 }
 
-export async function createTask(input: { title: string; description?: string; priority?: "low"|"medium"|"high"; dueDate?: string }): Promise<Task> {
-  const db = getDb();
-  const task = { id: randomUUID(), title: input.title, description: input.description ?? null, priority: input.priority ?? "medium" as const, status: "todo" as const, dueDate: input.dueDate ?? null, createdAt: now(), updatedAt: now() };
-  await db.insert(tasks).values(task);
+// ─── CRUD operations ───────────────────────────────────────────────────────────
+
+export async function createTask(input: {
+  title: string;
+  description?: string;
+  priority?: "low" | "medium" | "high";
+  dueDate?: string;
+}): Promise<Task> {
+  const task: Task = {
+    id: randomUUID(),
+    title: input.title,
+    description: input.description ?? null,
+    priority: input.priority ?? "medium",
+    status: "todo",
+    dueDate: input.dueDate ?? null,
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  store.set(task.id, task);
   return task;
 }
 
 export async function getAllTasks(): Promise<Task[]> {
-  return getDb().select().from(tasks).orderBy(desc(tasks.createdAt));
+  return Array.from(store.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 }
 
 export async function findTaskByTitle(title: string): Promise<Task | null> {
-  const db = getDb();
-  let r = await db.select().from(tasks).where(eq(tasks.title, title));
-  if (r.length) return r[0];
-  r = await db.select().from(tasks).where(like(tasks.title, `%${title}%`));
-  return r[0] ?? null;
+  const all = Array.from(store.values());
+  const exact = all.find((t) => t.title === title);
+  if (exact) return exact;
+  const partial = all.find((t) =>
+    t.title.toLowerCase().includes(title.toLowerCase())
+  );
+  return partial ?? null;
 }
 
 export async function getTaskById(id: string): Promise<Task | null> {
-  const r = await getDb().select().from(tasks).where(eq(tasks.id, id));
-  return r[0] ?? null;
+  return store.get(id) ?? null;
 }
 
-export async function updateTask(id: string, updates: Partial<Omit<Task, "id"|"createdAt">>): Promise<Task | null> {
-  await getDb().update(tasks).set({ ...updates, updatedAt: now() }).where(eq(tasks.id, id));
-  return getTaskById(id);
+export async function updateTask(
+  id: string,
+  updates: Partial<Omit<Task, "id" | "createdAt">>
+): Promise<Task | null> {
+  const existing = store.get(id);
+  if (!existing) return null;
+  const updated: Task = { ...existing, ...updates, updatedAt: now() };
+  store.set(id, updated);
+  return updated;
 }
 
 export async function deleteTask(id: string): Promise<void> {
-  await getDb().delete(tasks).where(eq(tasks.id, id));
+  store.delete(id);
 }
 
 export async function getOverdueTasks(): Promise<Task[]> {
   const today = new Date().toISOString().split("T")[0];
-  return getDb().select().from(tasks).where(and(lt(tasks.dueDate, today), or(eq(tasks.status, "todo"), eq(tasks.status, "in_progress")))).orderBy(asc(tasks.dueDate));
+  return Array.from(store.values())
+    .filter(
+      (t) =>
+        t.dueDate &&
+        t.dueDate < today &&
+        (t.status === "todo" || t.status === "in_progress")
+    )
+    .sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? ""));
 }
 
 export async function getTasksByStatus(status: Task["status"]): Promise<Task[]> {
-  return getDb().select().from(tasks).where(eq(tasks.status, status)).orderBy(desc(tasks.createdAt));
+  return Array.from(store.values())
+    .filter((t) => t.status === status)
+    .sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 }
 
 export async function getTasksByPriority(priority: Task["priority"]): Promise<Task[]> {
-  return getDb().select().from(tasks).where(eq(tasks.priority, priority)).orderBy(desc(tasks.createdAt));
+  return Array.from(store.values())
+    .filter((t) => t.priority === priority)
+    .sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 }
 
 export async function getTopPriorityTasks(limit = 3): Promise<Task[]> {
-  const high = await getDb().select().from(tasks).where(and(eq(tasks.priority, "high"), or(eq(tasks.status, "todo"), eq(tasks.status, "in_progress")))).orderBy(asc(tasks.dueDate));
+  const all = Array.from(store.values()).filter(
+    (t) => t.status === "todo" || t.status === "in_progress"
+  );
+  const high = all
+    .filter((t) => t.priority === "high")
+    .sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? ""));
   if (high.length >= limit) return high.slice(0, limit);
-  const med = await getDb().select().from(tasks).where(and(eq(tasks.priority, "medium"), or(eq(tasks.status, "todo"), eq(tasks.status, "in_progress")))).orderBy(asc(tasks.dueDate));
+  const med = all
+    .filter((t) => t.priority === "medium")
+    .sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? ""));
   return [...high, ...med].slice(0, limit);
 }

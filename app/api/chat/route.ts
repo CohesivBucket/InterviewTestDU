@@ -16,6 +16,7 @@ const TOOLS: OpenAI.Responses.Tool[] = [
     type: "function",
     name: "create_task",
     description: "Create a single task in the database. Call this once per task. For multiple tasks, call this function multiple times.",
+    strict: false,
     parameters: {
       type: "object",
       properties: {
@@ -30,6 +31,7 @@ const TOOLS: OpenAI.Responses.Tool[] = [
     type: "function",
     name: "get_tasks",
     description: "Fetch tasks from the database with optional filtering",
+    strict: false,
     parameters: {
       type: "object",
       properties: {
@@ -46,6 +48,7 @@ const TOOLS: OpenAI.Responses.Tool[] = [
     type: "function",
     name: "update_task",
     description: "Update a task's status, priority, title, or due date. Find the task by searching its title.",
+    strict: false,
     parameters: {
       type: "object",
       properties: {
@@ -62,6 +65,7 @@ const TOOLS: OpenAI.Responses.Tool[] = [
     type: "function",
     name: "delete_task",
     description: "Permanently delete a task from the database by searching its title.",
+    strict: false,
     parameters: {
       type: "object",
       properties: {
@@ -74,6 +78,7 @@ const TOOLS: OpenAI.Responses.Tool[] = [
     type: "function",
     name: "delete_all_tasks",
     description: "Delete ALL tasks from the database. Only use when user explicitly asks to clear everything.",
+    strict: false,
     parameters: { type: "object", properties: {} },
   },
 ];
@@ -197,7 +202,9 @@ export async function POST(req: Request) {
       });
 
       // Check if there are tool calls to execute
-      const toolCalls = response.output.filter((o: any) => o.type === "function_call");
+      const toolCalls = response.output.filter(
+        (o): o is OpenAI.Responses.ResponseFunctionToolCall => o.type === "function_call"
+      );
 
       if (toolCalls.length === 0) {
         // No tool calls — we have the final text response
@@ -216,7 +223,7 @@ export async function POST(req: Request) {
       }
 
       // Feed results back as next input
-      currentInput = `${currentInput}\n\nAssistant called tools:\n${toolCalls.map((tc: any) => `- ${tc.name}(${tc.arguments})`).join("\n")}\n\nTool results:\n${toolResults.join("\n")}\n\nNow provide a concise response to the user confirming what was done.`;
+      currentInput = `${currentInput}\n\nAssistant called tools:\n${toolCalls.map((tc) => `- ${tc.name}(${tc.arguments})`).join("\n")}\n\nTool results:\n${toolResults.join("\n")}\n\nNow provide a concise response to the user confirming what was done.`;
     }
 
     return Response.json({ text: finalText || "Done.", model: MODEL });
