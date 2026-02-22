@@ -23,8 +23,16 @@ interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  images?: string[];
   timestamp: Date;
 }
+
+const AVAILABLE_MODELS = [
+  { id: "gpt-4o-mini", label: "GPT-4o Mini", description: "Fast & cheap" },
+  { id: "gpt-4o", label: "GPT-4o", description: "Better quality" },
+  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", description: "Latest mini" },
+  { id: "gpt-4.1", label: "GPT-4.1", description: "Flagship" },
+];
 
 // ─── Theme tokens ─────────────────────────────────────────────────────────────
 
@@ -355,8 +363,11 @@ export default function Home() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [theme, setTheme] = useState<Theme>("dark");
   const [model, setModel] = useState("gpt-4o-mini");
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const msgHistory = useRef<{ role: string; content: string }[]>([]);
 
   const T = theme === "dark" ? DARK : LIGHT;
@@ -371,6 +382,28 @@ export default function Home() {
     const next: Theme = theme === "dark" ? "light" : "dark";
     setTheme(next);
     localStorage.setItem("taskflow-theme", next);
+  };
+
+  // ── Image handling ─────────────────────────────────────────────────────────
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach(file => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          setPendingImages(prev => [...prev, reader.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+
+  const removePendingImage = (idx: number) => {
+    setPendingImages(prev => prev.filter((_, i) => i !== idx));
   };
 
   // ── Data fetching ──────────────────────────────────────────────────────────
@@ -416,23 +449,24 @@ export default function Home() {
   // ── Chat ───────────────────────────────────────────────────────────────────
 
   const sendMessage = async (text: string) => {
-    if (!text.trim() || isLoading) return;
+    if ((!text.trim() && pendingImages.length === 0) || isLoading) return;
     setStarted(true);
 
-    const userMsg: Message = { id: Date.now().toString(), role: "user", content: text, timestamp: new Date() };
+    const msgImages = pendingImages.length > 0 ? [...pendingImages] : undefined;
+    const userMsg: Message = { id: Date.now().toString(), role: "user", content: text || "(image attached)", images: msgImages, timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
-    msgHistory.current = [...msgHistory.current, { role: "user", content: text }];
+    msgHistory.current = [...msgHistory.current, { role: "user", content: text || "I've attached an image. Please describe what you see and how it relates to my tasks." }];
+    setPendingImages([]);
     setIsLoading(true);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: msgHistory.current }),
+        body: JSON.stringify({ messages: msgHistory.current, model, images: msgImages }),
       });
 
       const data = await res.json();
-      if (data.model) setModel(data.model);
 
       const replyText = data.text || "I couldn't process that. Please try again.";
       const assistantMsg: Message = { id: (Date.now() + 1).toString(), role: "assistant", content: replyText, timestamp: new Date() };
@@ -450,7 +484,7 @@ export default function Home() {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = input.trim();
-    if (!text) return;
+    if (!text && pendingImages.length === 0) return;
     setInput("");
     await sendMessage(text);
   };
@@ -619,10 +653,54 @@ export default function Home() {
 
             {/* Right side controls */}
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px" }}>
-              {/* Model badge */}
-              <span style={{ fontSize: "10px", fontFamily: "'DM Mono', monospace", color: T.textMuted, background: T.inputBg, padding: "4px 10px", borderRadius: "6px", border: `1px solid ${T.border}` }}>
-                ◈ {model}
-              </span>
+              {/* Model selector */}
+              <div style={{ position: "relative" }}>
+                <button
+                  onClick={() => setShowModelPicker(!showModelPicker)}
+                  style={{
+                    fontSize: "10px", fontFamily: "'DM Mono', monospace", color: T.textMuted,
+                    background: T.inputBg, padding: "4px 10px", borderRadius: "6px",
+                    border: `1px solid ${showModelPicker ? T.accent : T.border}`,
+                    cursor: "pointer", transition: "all 0.15s", display: "flex", alignItems: "center", gap: "4px",
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = T.borderHover; }}
+                  onMouseLeave={e => { if (!showModelPicker) (e.currentTarget as HTMLButtonElement).style.borderColor = T.border; }}
+                >
+                  ◈ {model} <span style={{ fontSize: "8px", opacity: 0.5 }}>▼</span>
+                </button>
+                {showModelPicker && (
+                  <>
+                    <div style={{ position: "fixed", inset: 0, zIndex: 99 }} onClick={() => setShowModelPicker(false)} />
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 100,
+                      background: theme === "dark" ? "#1a1a2e" : "#fff",
+                      border: `1px solid ${T.border}`, borderRadius: "8px",
+                      padding: "4px", minWidth: "180px",
+                      boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+                    }}>
+                      {AVAILABLE_MODELS.map(m => (
+                        <button
+                          key={m.id}
+                          onClick={() => { setModel(m.id); setShowModelPicker(false); }}
+                          style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between",
+                            width: "100%", padding: "8px 10px", borderRadius: "6px", border: "none",
+                            background: model === m.id ? T.accentSoft : "transparent",
+                            color: model === m.id ? T.filterActiveText : T.text,
+                            fontSize: "11px", fontFamily: "'DM Mono', monospace", cursor: "pointer",
+                            transition: "all 0.1s",
+                          }}
+                          onMouseEnter={e => { if (model !== m.id) (e.currentTarget as HTMLButtonElement).style.background = T.cardHover; }}
+                          onMouseLeave={e => { if (model !== m.id) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                        >
+                          <span>{m.label}</span>
+                          <span style={{ fontSize: "9px", color: T.textMuted }}>{m.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
 
               {/* Theme toggle */}
               <button
@@ -674,6 +752,17 @@ export default function Home() {
                     <div style={{ width: "28px", height: "28px", borderRadius: "9px", background: "linear-gradient(135deg, #8b5cf6, #3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", flexShrink: 0 }}>◈</div>
                   )}
                   <div style={{ maxWidth: "72%" }}>
+                    {/* Image attachments */}
+                    {msg.images && msg.images.length > 0 && (
+                      <div style={{ display: "flex", gap: "6px", marginBottom: "6px", flexWrap: "wrap", justifyContent: isUser ? "flex-end" : "flex-start" }}>
+                        {msg.images.map((img, i) => (
+                          <img key={i} src={img} alt="attachment" style={{
+                            maxWidth: "200px", maxHeight: "150px", borderRadius: "10px",
+                            border: `1px solid ${T.border}`, objectFit: "cover",
+                          }} />
+                        ))}
+                      </div>
+                    )}
                     <div style={{
                       background: isUser ? T.userMsg : T.msgBg,
                       color: isUser ? "#fff" : T.text,
@@ -710,13 +799,61 @@ export default function Home() {
 
           {/* Input */}
           <div style={{ padding: "14px 20px 22px", borderTop: `1px solid ${T.border}`, backdropFilter: "blur(10px)", background: T.headerBg }}>
+            {/* Pending image previews */}
+            {pendingImages.length > 0 && (
+              <div style={{ display: "flex", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+                {pendingImages.map((img, i) => (
+                  <div key={i} style={{ position: "relative" }}>
+                    <img src={img} alt="pending" style={{ width: "60px", height: "60px", borderRadius: "8px", objectFit: "cover", border: `1px solid ${T.border}` }} />
+                    <button
+                      onClick={() => removePendingImage(i)}
+                      style={{
+                        position: "absolute", top: "-6px", right: "-6px", width: "18px", height: "18px",
+                        borderRadius: "50%", border: "none", background: "#f87171", color: "#fff",
+                        fontSize: "10px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                        lineHeight: 1,
+                      }}
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <form onSubmit={onSubmit} style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleImageUpload}
+                style={{ display: "none" }}
+              />
+
+              {/* Image upload button */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading}
+                title="Attach image"
+                style={{
+                  width: "44px", height: "44px", borderRadius: "12px", flexShrink: 0,
+                  border: `1px solid ${T.border}`, background: "transparent",
+                  color: pendingImages.length > 0 ? T.accent : T.textMuted,
+                  fontSize: "18px", cursor: isLoading ? "not-allowed" : "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = T.cardHover; (e.currentTarget as HTMLButtonElement).style.borderColor = T.borderHover; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.borderColor = T.border; }}
+              >📎</button>
+
               <input
                 ref={inputRef}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 disabled={isLoading}
-                placeholder="Add a task, ask a question, or give a command..."
+                placeholder={pendingImages.length > 0 ? "Describe the image or ask a question..." : "Add a task, ask a question, or give a command..."}
                 style={{
                   flex: 1, background: T.inputBg, border: `1px solid ${T.border}`,
                   borderRadius: "12px", padding: "12px 16px",
@@ -727,20 +864,20 @@ export default function Home() {
               <button
                 type="submit"
                 className="send-btn"
-                disabled={!input.trim() || isLoading}
+                disabled={(!input.trim() && pendingImages.length === 0) || isLoading}
                 style={{
                   width: "44px", height: "44px", borderRadius: "12px", border: "none", flexShrink: 0,
-                  background: input.trim() && !isLoading ? "linear-gradient(135deg, #8b5cf6, #7c3aed)" : T.inputBg,
-                  color: input.trim() && !isLoading ? "#fff" : T.textFaint,
-                  fontSize: "18px", cursor: input.trim() && !isLoading ? "pointer" : "not-allowed",
+                  background: (input.trim() || pendingImages.length > 0) && !isLoading ? "linear-gradient(135deg, #8b5cf6, #7c3aed)" : T.inputBg,
+                  color: (input.trim() || pendingImages.length > 0) && !isLoading ? "#fff" : T.textFaint,
+                  fontSize: "18px", cursor: (input.trim() || pendingImages.length > 0) && !isLoading ? "pointer" : "not-allowed",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 0.2s ease",
-                  boxShadow: input.trim() && !isLoading ? "0 4px 16px rgba(139,92,246,0.3)" : "none",
+                  boxShadow: (input.trim() || pendingImages.length > 0) && !isLoading ? "0 4px 16px rgba(139,92,246,0.3)" : "none",
                 }}
               >↑</button>
             </form>
             <div style={{ marginTop: "8px", textAlign: "center", fontSize: "10px", fontFamily: "'DM Mono', monospace", color: T.textFaint }}>
-              Enter to send · ✎ edit · ✓ complete · ▶ start · × delete
+              Enter to send · 📎 attach image · ✎ edit · ✓ complete · ▶ start · × delete
             </div>
           </div>
         </div>

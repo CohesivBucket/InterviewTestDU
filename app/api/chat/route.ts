@@ -7,7 +7,8 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export const MODEL = "gpt-4o-mini";
+const DEFAULT_MODEL = "gpt-4o-mini";
+const ALLOWED_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
 
 // ─── Tools definition (OpenAI function calling) ───────────────────────────────
 
@@ -166,8 +167,10 @@ Rules:
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
+    const { messages, model: requestedModel, images } = await req.json();
     const history: { role: string; content: string }[] = messages ?? [];
+    const selectedModel = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
+    const attachedImages: string[] = images ?? [];
 
     // Build conversation history string
     const conversationHistory = history
@@ -179,13 +182,25 @@ export async function POST(req: Request) {
 
     const lastMessage = history[history.length - 1]?.content ?? "";
 
-    const fullInput = [
+    const fullInputText = [
       conversationHistory ? `Previous conversation:\n${conversationHistory}\n\n---\n\n` : "",
       `User: ${lastMessage}`,
     ].join("");
 
+    // Build input — use multimodal format if images are attached
+    let firstInput: string | any[];
+    if (attachedImages.length > 0) {
+      const content: any[] = [{ type: "input_text", text: fullInputText }];
+      for (const img of attachedImages) {
+        content.push({ type: "input_image", image_url: img });
+      }
+      firstInput = content;
+    } else {
+      firstInput = fullInputText;
+    }
+
     // ── Agentic loop — keep calling until no more tool calls ─────────────────
-    let currentInput = fullInput;
+    let currentInput: string | any[] = firstInput;
     let finalText = "";
     let iterations = 0;
     const MAX_ITERATIONS = 20; // safety limit for bulk task creation
@@ -194,7 +209,7 @@ export async function POST(req: Request) {
       iterations++;
 
       const response = await client.responses.create({
-        model: MODEL,
+        model: selectedModel,
         instructions: getSystemPrompt(),
         input: currentInput,
         tools: TOOLS,
@@ -222,11 +237,12 @@ export async function POST(req: Request) {
         toolResults.push(`Tool "${toolCall.name}" result: ${result}`);
       }
 
-      // Feed results back as next input
-      currentInput = `${currentInput}\n\nAssistant called tools:\n${toolCalls.map((tc) => `- ${tc.name}(${tc.arguments})`).join("\n")}\n\nTool results:\n${toolResults.join("\n")}\n\nNow provide a concise response to the user confirming what was done.`;
+      // Feed results back as next input (always string after first iteration)
+      const inputText = typeof currentInput === "string" ? currentInput : fullInputText;
+      currentInput = `${inputText}\n\nAssistant called tools:\n${toolCalls.map((tc) => `- ${tc.name}(${tc.arguments})`).join("\n")}\n\nTool results:\n${toolResults.join("\n")}\n\nNow provide a concise response to the user confirming what was done.`;
     }
 
-    return Response.json({ text: finalText || "Done.", model: MODEL });
+    return Response.json({ text: finalText || "Done.", model: selectedModel });
 
   } catch (error) {
     console.error("Chat API error:", error);
