@@ -187,7 +187,9 @@ function ToolCard({
       <div
         style={{
           background: theme.toolCardBg,
-          border: `1px solid ${theme.toolCardBorder}`,
+          borderTop: `1px solid ${theme.toolCardBorder}`,
+          borderRight: `1px solid ${theme.toolCardBorder}`,
+          borderBottom: `1px solid ${theme.toolCardBorder}`,
           borderLeft: `3px solid ${PRIORITY_COLOR[task.priority] ?? theme.accent}`,
           borderRadius: "10px",
           padding: "10px 14px",
@@ -377,7 +379,9 @@ function ToolCard({
       <div
         style={{
           background: theme.toolCardBg,
-          border: `1px solid ${theme.toolCardBorder}`,
+          borderTop: `1px solid ${theme.toolCardBorder}`,
+          borderRight: `1px solid ${theme.toolCardBorder}`,
+          borderBottom: `1px solid ${theme.toolCardBorder}`,
           borderLeft: `3px solid ${STATUS_COLOR[task.status] ?? theme.accent}`,
           borderRadius: "10px",
           padding: "10px 14px",
@@ -430,7 +434,9 @@ function ToolCard({
       <div
         style={{
           background: theme.toolCardBg,
-          border: `1px solid ${theme.toolCardBorder}`,
+          borderTop: `1px solid ${theme.toolCardBorder}`,
+          borderRight: `1px solid ${theme.toolCardBorder}`,
+          borderBottom: `1px solid ${theme.toolCardBorder}`,
           borderLeft: "3px solid #f87171",
           borderRadius: "10px",
           padding: "10px 14px",
@@ -472,7 +478,9 @@ function ToolCard({
       <div
         style={{
           background: theme.toolCardBg,
-          border: `1px solid ${theme.toolCardBorder}`,
+          borderTop: `1px solid ${theme.toolCardBorder}`,
+          borderRight: `1px solid ${theme.toolCardBorder}`,
+          borderBottom: `1px solid ${theme.toolCardBorder}`,
           borderLeft: "3px solid #f87171",
           borderRadius: "10px",
           padding: "10px 14px",
@@ -628,7 +636,9 @@ function TaskCard({
       <div
         style={{
           background: theme.cardHover,
-          border: `1px solid ${theme.accent}`,
+          borderTop: `1px solid ${theme.accent}`,
+          borderRight: `1px solid ${theme.accent}`,
+          borderBottom: `1px solid ${theme.accent}`,
           borderLeft: `3px solid ${PRIORITY_COLOR[editPriority]}`,
           borderRadius: "10px",
           padding: "12px 14px",
@@ -828,7 +838,9 @@ function TaskCard({
       onMouseLeave={() => setHovered(false)}
       style={{
         background: hovered && !done ? theme.cardHover : theme.cardBg,
-        border: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
+        borderTop: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
+        borderRight: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
+        borderBottom: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
         borderLeft: `3px solid ${done ? theme.border : PRIORITY_COLOR[task.priority]}`,
         borderRadius: "10px",
         padding: "12px 14px",
