@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-// ─── Task type ─────────────────────────────────────────────────────────────────
+// Task type
 
 export type Task = {
   id: string;
@@ -13,13 +13,13 @@ export type Task = {
   updatedAt: string;
 };
 
-// ─── In-memory store (works on Vercel serverless + local dev) ──────────────────
+// In-memory store (Vercel serverless compatible)
 
 const store: Map<string, Task> = new Map();
 
 const now = () => new Date().toISOString();
 
-// ─── Date parser ───────────────────────────────────────────────────────────────
+// Natural language date parsing
 
 export function parseDate(s: string): string {
   const today = new Date();
@@ -46,7 +46,7 @@ export function parseDate(s: string): string {
   return isNaN(parsed.getTime()) ? s : parsed.toISOString().split("T")[0];
 }
 
-// ─── CRUD operations ───────────────────────────────────────────────────────────
+// CRUD
 
 export async function createTask(input: {
   title: string;

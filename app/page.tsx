@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useChat } from "@ai-sdk/react";
-import { TextStreamChatTransport } from "ai";
+import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Types
 
 type Priority = "low" | "medium" | "high";
 type Status = "todo" | "in_progress" | "done";
@@ -23,13 +23,16 @@ interface Task {
 }
 
 const AVAILABLE_MODELS = [
+  { id: "gpt-4.1-nano", label: "GPT-4.1 Nano", description: "Fastest" },
   { id: "gpt-4o-mini", label: "GPT-4o Mini", description: "Fast & cheap" },
-  { id: "gpt-4o", label: "GPT-4o", description: "Better quality" },
-  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", description: "Latest mini" },
+  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", description: "Balanced" },
+  { id: "gpt-4o", label: "GPT-4o", description: "Strong all-round" },
   { id: "gpt-4.1", label: "GPT-4.1", description: "Flagship" },
+  { id: "o4-mini", label: "o4-mini", description: "Fast reasoning" },
+  { id: "o3-mini", label: "o3-mini", description: "Reasoning" },
 ];
 
-// ─── Theme tokens ─────────────────────────────────────────────────────────────
+// Theme tokens
 
 const DARK = {
   bg: "#080810",
@@ -81,7 +84,7 @@ const LIGHT = {
   toolCardBorder: "rgba(124,58,237,0.1)",
 };
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// Visual constants
 
 const PRIORITY_COLOR: Record<Priority, string> = {
   high: "#f87171",
@@ -108,7 +111,25 @@ const SUGGESTIONS = [
   "Mark Buy milk as done",
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Helpers
+
+/** Spread onto a button/div to apply hover styles without CSS classes. */
+function hover(
+  on: Record<string, string>,
+  off?: Record<string, string>,
+) {
+  const reset =
+    off ??
+    Object.fromEntries(
+      Object.keys(on).map((k) => [k, k === "background" ? "transparent" : ""]),
+    );
+  return {
+    onMouseEnter: (e: React.MouseEvent) =>
+      Object.assign((e.currentTarget as HTMLElement).style, on),
+    onMouseLeave: (e: React.MouseEvent) =>
+      Object.assign((e.currentTarget as HTMLElement).style, reset),
+  };
+}
 
 function formatDate(d: string | null | undefined): string {
   if (!d) return "";
@@ -137,7 +158,7 @@ function formatTime(d: Date): string {
   });
 }
 
-// ─── ToolCard — renders tool invocations as structured cards in chat ─────────
+// ToolCard — structured UI for tool invocations inside chat messages
 
 function ToolCard({
   part,
@@ -159,7 +180,7 @@ function ToolCard({
   const isError = result?.success === false;
   const isLoading = part.state === "call" || part.state === "partial-call";
 
-  // ── Task card for create_task result ──
+  // create_task
   if (toolName === "create_task" && isSuccess && result?.task) {
     const task = result.task as Task;
     return (
@@ -233,7 +254,7 @@ function ToolCard({
     );
   }
 
-  // ── Task list for get_tasks result ──
+  // get_tasks
   if (toolName === "get_tasks" && isSuccess && result?.tasks) {
     const tasks = result.tasks as Task[];
     if (tasks.length === 0) {
@@ -349,7 +370,7 @@ function ToolCard({
     );
   }
 
-  // ── Update task result ──
+  // update_task
   if (toolName === "update_task" && isSuccess && result?.task) {
     const task = result.task as Task;
     return (
@@ -403,7 +424,7 @@ function ToolCard({
     );
   }
 
-  // ── Delete task result ──
+  // delete_task
   if (toolName === "delete_task" && isSuccess) {
     return (
       <div
@@ -445,7 +466,7 @@ function ToolCard({
     );
   }
 
-  // ── Delete all result ──
+  // delete_all_tasks
   if (toolName === "delete_all_tasks" && isSuccess) {
     return (
       <div
@@ -491,7 +512,7 @@ function ToolCard({
     );
   }
 
-  // ── Error result ──
+  // Error fallback
   if (isError) {
     return (
       <div
@@ -511,7 +532,7 @@ function ToolCard({
     );
   }
 
-  // ── Loading state ──
+  // Loading
   if (isLoading) {
     return (
       <div
@@ -535,7 +556,7 @@ function ToolCard({
     );
   }
 
-  // ── Generic fallback for completed tools we don't have special UI for ──
+  // Generic fallback
   return (
     <div
       style={{
@@ -554,7 +575,7 @@ function ToolCard({
   );
 }
 
-// ─── TaskCard ─────────────────────────────────────────────────────────────────
+// TaskCard — sidebar task with inline editing
 
 function TaskCard({
   task,
@@ -601,7 +622,7 @@ function TaskCard({
 
   const cancelEdit = () => setEditing(false);
 
-  // ── Edit mode ──
+  // Edit mode
   if (editing) {
     return (
       <div
@@ -799,7 +820,7 @@ function TaskCard({
     );
   }
 
-  // ── Normal view ──
+  // Normal view
   return (
     <div
       onClick={() => setExpanded(!expanded)}
@@ -945,14 +966,7 @@ function TaskCard({
               justifyContent: "center",
               transition: "all 0.15s",
             }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background =
-                "rgba(139,92,246,0.15)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background =
-                "transparent";
-            }}
+            {...hover({ background: "rgba(139,92,246,0.15)" })}
           >
             &#x270E;
           </button>
@@ -974,14 +988,7 @@ function TaskCard({
                 justifyContent: "center",
                 transition: "all 0.15s",
               }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background =
-                  "rgba(52,211,153,0.15)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background =
-                  "transparent";
-              }}
+              {...hover({ background: "rgba(52,211,153,0.15)" })}
             >
               &#x2713;
             </button>
@@ -1004,14 +1011,7 @@ function TaskCard({
                 justifyContent: "center",
                 transition: "all 0.15s",
               }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background =
-                  "rgba(251,191,36,0.15)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background =
-                  "transparent";
-              }}
+              {...hover({ background: "rgba(251,191,36,0.15)" })}
             >
               &#x25B6;
             </button>
@@ -1033,17 +1033,10 @@ function TaskCard({
               justifyContent: "center",
               transition: "all 0.15s",
             }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background =
-                "rgba(248,113,113,0.12)";
-              (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background =
-                "transparent";
-              (e.currentTarget as HTMLButtonElement).style.color =
-                theme.textMuted;
-            }}
+            {...hover(
+              { background: "rgba(248,113,113,0.12)", color: "#f87171" },
+              { background: "transparent", color: theme.textMuted },
+            )}
           >
             &#x00D7;
           </button>
@@ -1053,7 +1046,7 @@ function TaskCard({
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// Root page component
 
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -1071,14 +1064,14 @@ export default function Home() {
 
   const T = theme === "dark" ? DARK : LIGHT;
 
-  // ── Vercel AI SDK useChat ──────────────────────────────────────────────────
+  // Chat transport + hook
 
   const modelRef = useRef(model);
   modelRef.current = model;
 
   const [chatTransport] = useState(
     () =>
-      new TextStreamChatTransport({
+      new DefaultChatTransport({
         api: "/api/chat",
         body: () => ({ model: modelRef.current }),
       })
@@ -1101,7 +1094,7 @@ export default function Home() {
 
   const isLoading = status === "streaming" || status === "submitted";
 
-  // ── Load saved theme ───────────────────────────────────────────────────────
+  // Persist theme
   useEffect(() => {
     const saved = localStorage.getItem("taskflow-theme") as Theme | null;
     if (saved) setTheme(saved);
@@ -1113,7 +1106,7 @@ export default function Home() {
     localStorage.setItem("taskflow-theme", next);
   };
 
-  // ── Image handling ─────────────────────────────────────────────────────────
+  // Image attachments
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -1135,7 +1128,7 @@ export default function Home() {
     setPendingImages((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  // Data sync
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -1154,7 +1147,7 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  // ── Task actions ───────────────────────────────────────────────────────────
+  // Sidebar task mutations
 
   const handleStatusChange = async (id: string, status: Status) => {
     setTasks((prev) =>
@@ -1183,7 +1176,7 @@ export default function Home() {
     });
   };
 
-  // ── Chat submit ────────────────────────────────────────────────────────────
+  // Send handler
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1193,11 +1186,9 @@ export default function Home() {
     setStarted(true);
     setInput("");
 
-    // Build files from pending images for AI SDK
     const files =
       pendingImages.length > 0
         ? pendingImages.map((dataUrl) => {
-            // Extract media type from data URL
             const match = dataUrl.match(/^data:(image\/[^;]+);/);
             const mediaType = match ? match[1] : "image/png";
             return { type: "file" as const, mediaType, url: dataUrl };
@@ -1206,17 +1197,15 @@ export default function Home() {
 
     setPendingImages([]);
 
-    // Send message via AI SDK useChat
     await sendMessage({
       text: text || "I've attached an image. Please describe what you see and how it relates to my tasks.",
       files,
     });
 
-    // Refresh tasks after AI responds
     await fetchTasks();
   };
 
-  // ── Derived state ──────────────────────────────────────────────────────────
+  // Filter state
 
   const counts: Record<Filter, number> = {
     all: tasks.length,
@@ -1240,7 +1229,7 @@ export default function Home() {
     { key: "overdue", label: "Overdue", icon: "\u26A0" },
   ];
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // Render
 
   return (
     <>
@@ -1562,7 +1551,6 @@ export default function Home() {
               background: T.headerBg,
             }}
           >
-            {/* Sidebar toggle */}
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               style={{
@@ -1580,14 +1568,7 @@ export default function Home() {
                 transition: "all 0.15s",
                 flexShrink: 0,
               }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background =
-                  T.cardHover;
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background =
-                  "transparent";
-              }}
+              {...hover({ background: T.cardHover })}
             >
               {isSidebarOpen ? "\u25C0" : "\u25B6"}
             </button>
@@ -1647,15 +1628,10 @@ export default function Home() {
                     alignItems: "center",
                     gap: "4px",
                   }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor =
-                      T.borderHover;
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!showModelPicker)
-                      (e.currentTarget as HTMLButtonElement).style.borderColor =
-                        T.border;
-                  }}
+                  {...hover(
+                    { borderColor: T.borderHover },
+                    { borderColor: showModelPicker ? T.accent : T.border },
+                  )}
                 >
                   &#x25C8; {model}{" "}
                   <span style={{ fontSize: "8px", opacity: 0.5 }}>
@@ -1711,18 +1687,9 @@ export default function Home() {
                             cursor: "pointer",
                             transition: "all 0.1s",
                           }}
-                          onMouseEnter={(e) => {
-                            if (model !== m.id)
-                              (
-                                e.currentTarget as HTMLButtonElement
-                              ).style.background = T.cardHover;
-                          }}
-                          onMouseLeave={(e) => {
-                            if (model !== m.id)
-                              (
-                                e.currentTarget as HTMLButtonElement
-                              ).style.background = "transparent";
-                          }}
+                          {...(model !== m.id
+                            ? hover({ background: T.cardHover })
+                            : {})}
                         >
                           <span>{m.label}</span>
                           <span
@@ -1758,18 +1725,10 @@ export default function Home() {
                   justifyContent: "center",
                   transition: "all 0.2s ease",
                 }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.background =
-                    T.cardHover;
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    T.borderHover;
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.background =
-                    "transparent";
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    T.border;
-                }}
+                {...hover(
+                  { background: T.cardHover, borderColor: T.borderHover },
+                  { background: "transparent", borderColor: T.border },
+                )}
               >
                 {theme === "dark" ? "\u2600" : "\u263D"}
               </button>
@@ -2195,18 +2154,10 @@ export default function Home() {
                   justifyContent: "center",
                   transition: "all 0.15s",
                 }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.background =
-                    T.cardHover;
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    T.borderHover;
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.background =
-                    "transparent";
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    T.border;
-                }}
+                {...hover(
+                  { background: T.cardHover, borderColor: T.borderHover },
+                  { background: "transparent", borderColor: T.border },
+                )}
               >
                 &#x1F4CE;
               </button>

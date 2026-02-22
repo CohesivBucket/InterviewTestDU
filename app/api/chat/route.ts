@@ -3,12 +3,16 @@ import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
 import * as db from "@/lib/db";
 
-// ─── Config ──────────────────────────────────────────────────────────────────
+// Config
 
 const DEFAULT_MODEL = "gpt-4o-mini";
-const ALLOWED_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
+const ALLOWED_MODELS = [
+  "gpt-4.1-nano", "gpt-4o-mini", "gpt-4.1-mini",
+  "gpt-4o", "gpt-4.1",
+  "o4-mini", "o3-mini",
+];
 
-// ─── System prompt ───────────────────────────────────────────────────────────
+// System prompt
 
 function getSystemPrompt(): string {
   return `You are TaskFlow AI — a sharp, efficient task management assistant.
@@ -25,7 +29,7 @@ Rules:
 - Be concise and action-oriented`;
 }
 
-// ─── Route handler (Vercel AI SDK with streaming) ────────────────────────────
+// POST /api/chat
 
 export async function POST(req: Request) {
   const { messages, model: requestedModel } = (await req.json()) as {
