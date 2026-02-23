@@ -82,58 +82,128 @@ async function generateImageForAttachment(prompt: string): Promise<TaskAttachmen
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
 
-  const models = ["gpt-image-1", "dall-e-3"] as const;
+  // Edge Config has a 2MB body limit, so we need compact images.
+  // Strategy: try gpt-image-1 with JPEG output (much smaller than PNG),
+  // then fall back to dall-e-3 with size check.
 
-  for (const model of models) {
-    const body: Record<string, unknown> = {
-      model,
-      prompt: `${prompt}. Make it high quality and visually appealing.`,
-      n: 1,
-      size: "1024x1024",
-    };
-    if (model === "dall-e-3") {
-      body.response_format = "b64_json";
-    }
+  // Attempt 1: gpt-image-1 with JPEG output_format for smaller file size
+  try {
+    const res = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-image-1",
+        prompt: `${prompt}. Make it visually appealing.`,
+        n: 1,
+        size: "1024x1024",
+        quality: "low",           // Smaller file for storage
+        output_format: "jpeg",    // JPEG is ~5-10x smaller than PNG
+      }),
+    });
 
-    try {
-      const res = await fetch("https://api.openai.com/v1/images/generations", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (res.ok) {
-        const data = (await res.json()) as {
-          data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+    if (res.ok) {
+      const data = (await res.json()) as {
+        data?: Array<{ b64_json?: string; url?: string }>;
+      };
+      const img = data.data?.[0];
+      const b64 = img?.b64_json;
+      if (b64 && b64.length < 1_400_000) { // ~1.4MB base64 = ~1MB file, safe for Edge Config
+        return {
+          name: `generated-${prompt.slice(0, 30).replace(/[^a-zA-Z0-9]/g, "-")}.jpg`,
+          type: "image/jpeg",
+          dataUrl: `data:image/jpeg;base64,${b64}`,
         };
-        const img = data.data?.[0];
-        if (!img) continue;
-
-        const imageDataUrl = img.b64_json
-          ? `data:image/png;base64,${img.b64_json}`
-          : img.url ?? "";
-
-        if (imageDataUrl) {
-          return {
-            name: `generated-${prompt.slice(0, 30).replace(/[^a-zA-Z0-9]/g, "-")}.png`,
-            type: "image/png",
-            dataUrl: imageDataUrl,
-          };
-        }
       }
-
+      if (b64) {
+        console.warn(`gpt-image-1 JPEG still too large: ${b64.length} chars, skipping`);
+      }
+    } else {
       const errBody = await res.text();
-      if (res.status === 404 || errBody.includes("model_not_found")) continue;
-      console.error(`Image gen for attachment error (${model}):`, res.status, errBody);
-      break; // Non-recoverable error, stop trying
-    } catch (err) {
-      console.error(`Image gen for attachment network error (${model}):`, err);
-      break;
+      console.error("gpt-image-1 JPEG attempt failed:", res.status, errBody.slice(0, 200));
+      // If unknown parameter, fall through to attempt 2
     }
+  } catch (err) {
+    console.error("gpt-image-1 JPEG network error:", err);
   }
+
+  // Attempt 2: gpt-image-1 without output_format (PNG, but with quality:low)
+  try {
+    const res = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-image-1",
+        prompt: `${prompt}. Simple, clean style.`,
+        n: 1,
+        size: "1024x1024",
+        quality: "low",
+      }),
+    });
+
+    if (res.ok) {
+      const data = (await res.json()) as {
+        data?: Array<{ b64_json?: string }>;
+      };
+      const b64 = data.data?.[0]?.b64_json;
+      if (b64 && b64.length < 1_400_000) {
+        return {
+          name: `generated-${prompt.slice(0, 30).replace(/[^a-zA-Z0-9]/g, "-")}.png`,
+          type: "image/png",
+          dataUrl: `data:image/png;base64,${b64}`,
+        };
+      }
+      if (b64) {
+        console.warn(`gpt-image-1 PNG low-q still too large: ${b64.length} chars`);
+      }
+    }
+  } catch (err) {
+    console.error("gpt-image-1 low-q attempt error:", err);
+  }
+
+  // Attempt 3: dall-e-3 (usually produces smaller PNGs)
+  try {
+    const res = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "dall-e-3",
+        prompt: `${prompt}. Simple, clean style.`,
+        n: 1,
+        size: "1024x1024",
+        quality: "standard",
+        response_format: "b64_json",
+      }),
+    });
+
+    if (res.ok) {
+      const data = (await res.json()) as {
+        data?: Array<{ b64_json?: string }>;
+      };
+      const b64 = data.data?.[0]?.b64_json;
+      if (b64 && b64.length < 1_400_000) {
+        return {
+          name: `generated-${prompt.slice(0, 30).replace(/[^a-zA-Z0-9]/g, "-")}.png`,
+          type: "image/png",
+          dataUrl: `data:image/png;base64,${b64}`,
+        };
+      }
+      if (b64) {
+        console.warn(`dall-e-3 still too large: ${b64.length} chars`);
+      }
+    }
+  } catch (err) {
+    console.error("dall-e-3 attachment error:", err);
+  }
+
   return null;
 }
 
@@ -288,18 +358,40 @@ export async function POST(req: Request) {
             }
           }
 
-          const task = await db.createTask({
-            title,
-            description,
-            priority: p,
-            dueDate,
-            attachments: attachments.length > 0 ? attachments : undefined,
-          });
-          return {
-            success: true as const,
-            task,
-            attachedImages: attachments.length,
-          };
+          // Try creating with attachments; if too large, retry without
+          try {
+            const task = await db.createTask({
+              title,
+              description,
+              priority: p,
+              dueDate,
+              attachments: attachments.length > 0 ? attachments : undefined,
+            });
+            return {
+              success: true as const,
+              task,
+              attachedImages: attachments.length,
+            };
+          } catch (err: unknown) {
+            const errStr = String(err);
+            if (attachments.length > 0 && (errStr.includes("entity_too_large") || errStr.includes("2mb"))) {
+              // Retry without attachments
+              console.warn("Task attachment too large, creating without image");
+              const task = await db.createTask({
+                title,
+                description,
+                priority: p,
+                dueDate,
+              });
+              return {
+                success: true as const,
+                task,
+                attachedImages: 0,
+                note: "Image was too large to store. Task created without attachment.",
+              };
+            }
+            throw err;
+          }
         },
       }),
 
@@ -437,12 +529,29 @@ export async function POST(req: Request) {
             updates.attachments = [...existing, ...newImages];
           }
 
-          const updated = await db.updateTask(match.id, updates);
-          return {
-            success: true as const,
-            task: updated,
-            attachedImages: newImages.length,
-          };
+          // Try updating; if too large, retry without new images
+          try {
+            const updated = await db.updateTask(match.id, updates);
+            return {
+              success: true as const,
+              task: updated,
+              attachedImages: newImages.length,
+            };
+          } catch (err: unknown) {
+            const errStr = String(err);
+            if (newImages.length > 0 && (errStr.includes("entity_too_large") || errStr.includes("2mb"))) {
+              console.warn("Task attachment too large, updating without image");
+              delete updates.attachments;
+              const updated = await db.updateTask(match.id, updates);
+              return {
+                success: true as const,
+                task: updated,
+                attachedImages: 0,
+                note: "Image was too large to store. Task updated without attachment.",
+              };
+            }
+            throw err;
+          }
         },
       }),
 
