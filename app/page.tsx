@@ -160,30 +160,40 @@ function formatTime(d: Date): string {
 }
 
 // ToolCard — structured UI for tool invocations inside chat messages
+//
+// AI SDK v6 UIMessage parts use:
+//   type: "tool-<name>" | "dynamic-tool"
+//   input (not args), output (not result)
+//   state: "input-streaming" | "input-available" | "output-available" | "output-error"
 
 function ToolCard({
   part,
   t: theme,
 }: {
-  part: {
-    type: string;
-    toolName: string;
-    state: string;
-    result?: unknown;
-    args?: unknown;
-  };
+  part: Record<string, unknown>;
   t: typeof DARK;
 }) {
-  const result = part.result as Record<string, unknown> | undefined;
-  const args = part.args as Record<string, unknown> | undefined;
-  const toolName = part.toolName;
-  const isSuccess = result?.success === true;
-  const isError = result?.success === false;
-  const isLoading = part.state === "call" || part.state === "partial-call";
+  // Normalize field access across typed ("tool-X") and dynamic ("dynamic-tool") parts
+  const toolName =
+    (part.toolName as string) ??
+    (typeof part.type === "string" && (part.type as string).startsWith("tool-")
+      ? (part.type as string).slice(5)
+      : "unknown");
+
+  const output = part.output as Record<string, unknown> | undefined;
+  const input = part.input as Record<string, unknown> | undefined;
+  const state = part.state as string;
+
+  const isSuccess = state === "output-available" && output?.success === true;
+  const isError =
+    state === "output-error" ||
+    (state === "output-available" && output?.success === false);
+  const isLoading =
+    state === "input-streaming" || state === "input-available";
 
   // create_task
-  if (toolName === "create_task" && isSuccess && result?.task) {
-    const task = result.task as Task;
+  if (toolName === "create_task" && isSuccess && output?.task) {
+    const task = output.task as Task;
     return (
       <div
         style={{
@@ -258,8 +268,8 @@ function ToolCard({
   }
 
   // get_tasks
-  if (toolName === "get_tasks" && isSuccess && result?.tasks) {
-    const tasks = result.tasks as Task[];
+  if (toolName === "get_tasks" && isSuccess && output?.tasks) {
+    const tasks = output.tasks as Task[];
     if (tasks.length === 0) {
       return (
         <div
@@ -374,8 +384,8 @@ function ToolCard({
   }
 
   // update_task
-  if (toolName === "update_task" && isSuccess && result?.task) {
-    const task = result.task as Task;
+  if (toolName === "update_task" && isSuccess && output?.task) {
+    const task = output.task as Task;
     return (
       <div
         style={{
@@ -466,7 +476,7 @@ function ToolCard({
           <span
             style={{ fontSize: "12px", color: theme.textMuted, fontWeight: 500 }}
           >
-            {String(result?.deleted ?? "")}
+            {String(output?.deleted ?? "")}
           </span>
         </div>
       </div>
@@ -514,7 +524,7 @@ function ToolCard({
               fontFamily: "monospace",
             }}
           >
-            {String(result?.deleted_count ?? 0)} tasks removed
+            {String(output?.deleted_count ?? 0)} tasks removed
           </span>
         </div>
       </div>
@@ -536,7 +546,7 @@ function ToolCard({
           fontFamily: "monospace",
         }}
       >
-        {String(result?.error ?? "Tool call failed")}
+        {String(output?.error ?? (part.errorText as string) ?? "Tool call failed")}
       </div>
     );
   }
@@ -579,7 +589,7 @@ function ToolCard({
         fontFamily: "monospace",
       }}
     >
-      {toolName}: {args ? JSON.stringify(args) : "done"}
+      {toolName}: {input ? JSON.stringify(input) : "done"}
     </div>
   );
 }
@@ -1654,22 +1664,22 @@ export default function Home() {
                 {showModelPicker && (
                   <>
                     <div
-                      style={{ position: "fixed", inset: 0, zIndex: 99 }}
+                      style={{ position: "fixed", inset: 0, zIndex: 9998 }}
                       onClick={() => setShowModelPicker(false)}
                     />
                     <div
                       style={{
-                        position: "absolute",
-                        top: "calc(100% + 4px)",
-                        right: 0,
-                        zIndex: 100,
+                        position: "fixed",
+                        top: "52px",
+                        right: "52px",
+                        zIndex: 9999,
                         background:
                           theme === "dark" ? "#1a1a2e" : "#fff",
                         border: `1px solid ${T.border}`,
                         borderRadius: "8px",
                         padding: "4px",
-                        minWidth: "180px",
-                        boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+                        minWidth: "200px",
+                        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
                       }}
                     >
                       {AVAILABLE_MODELS.map((m) => (
@@ -1886,8 +1896,12 @@ export default function Home() {
                   <div style={{ maxWidth: "72%" }}>
                     {/* Render parts */}
                     {msg.parts.map((part, idx) => {
-                      // Text part
+                      // Skip step-start markers
+                      if (part.type === "step-start") return null;
+
+                      // Text part — skip empty text
                       if (part.type === "text") {
+                        if (!part.text) return null;
                         return (
                           <div key={idx}>
                             <div
@@ -1950,27 +1964,21 @@ export default function Home() {
                         }
                       }
 
-                      // Tool invocation part — render as structured task card
+                      // Tool invocation — render as structured task card
                       if (
                         part.type?.startsWith("tool-") ||
                         part.type === "dynamic-tool"
                       ) {
-                        const toolPart = part as {
-                          type: string;
-                          toolName: string;
-                          state: string;
-                          result?: unknown;
-                          args?: unknown;
-                        };
                         return (
                           <ToolCard
                             key={idx}
-                            part={toolPart}
+                            part={part as Record<string, unknown>}
                             t={T}
                           />
                         );
                       }
 
+                      // Skip step-start and other internal part types
                       return null;
                     })}
 
