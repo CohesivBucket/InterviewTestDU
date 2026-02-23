@@ -55,10 +55,21 @@ Always use your tools — never pretend to create or delete tasks without callin
 
 export async function POST(req: Request) {
   try {
-  const { messages, model: requestedModel } = (await req.json()) as {
+  const { messages: rawMessages, model: requestedModel } = (await req.json()) as {
     messages: UIMessage[];
     model?: string;
   };
+
+  // Ensure all messages have parts array (AI SDK v6 requirement)
+  const messages: UIMessage[] = rawMessages.map((msg) => {
+    if (msg.parts && msg.parts.length > 0) return msg;
+    // Convert legacy content-based messages to parts format
+    const content = (msg as unknown as { content?: string }).content;
+    return {
+      ...msg,
+      parts: [{ type: "text" as const, text: content ?? "" }],
+    };
+  });
 
   const selectedModel = ALLOWED_MODELS.includes(requestedModel ?? "")
     ? requestedModel!
