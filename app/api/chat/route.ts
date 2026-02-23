@@ -2,6 +2,7 @@ import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs } from
 import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
 import * as db from "@/lib/db";
+import type { TaskAttachment } from "@/lib/types";
 
 // Config
 
@@ -11,6 +12,38 @@ const ALLOWED_MODELS = [
   "gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.2-pro",
   "o4-mini",
 ];
+
+// ─── Extract image attachments from chat messages ────────────────────
+
+interface FilePart {
+  type: "file";
+  mediaType?: string;
+  url?: string;
+  filename?: string;
+  name?: string;
+}
+
+function extractChatImages(messages: UIMessage[]): TaskAttachment[] {
+  const images: TaskAttachment[] = [];
+  for (const msg of messages) {
+    if (!msg.parts) continue;
+    for (const part of msg.parts) {
+      const fp = part as unknown as FilePart;
+      if (
+        fp.type === "file" &&
+        fp.mediaType?.startsWith("image/") &&
+        fp.url
+      ) {
+        images.push({
+          name: fp.filename ?? fp.name ?? `image.${fp.mediaType.split("/")[1] ?? "png"}`,
+          type: fp.mediaType,
+          dataUrl: fp.url,
+        });
+      }
+    }
+  }
+  return images;
+}
 
 // System prompt
 
@@ -36,6 +69,11 @@ ${taskSummary}
 You have tools to CREATE, READ, UPDATE, and DELETE tasks in a real database.
 You can also GENERATE IMAGES using AI (powered by Google Gemini) — use the generate_image tool when users want to create, draw, design, or visualize anything.
 Always use your tools — never pretend to create or delete tasks without calling the function.
+
+## Image Attachments
+When a user shares images in the chat and asks you to create a task with those images, set attach_chat_images to true. This will automatically attach all images from the conversation to the task.
+You can also add images to existing tasks using the update_task tool with attach_chat_images: true.
+You DO have this ability — always use it when the user wants images attached to tasks.
 
 ## Response Style
 - Use **markdown formatting**: headers, bold, lists, code blocks when appropriate
@@ -72,6 +110,9 @@ export async function POST(req: Request) {
     };
   });
 
+  // Extract images from the conversation for tool access
+  const chatImages = extractChatImages(messages);
+
   const selectedModel = ALLOWED_MODELS.includes(requestedModel ?? "")
     ? requestedModel!
     : DEFAULT_MODEL;
@@ -83,9 +124,13 @@ export async function POST(req: Request) {
     tools: {
       create_task: tool({
         description:
-          "Create a single task in the database. Call this once per task. For multiple tasks, call this function multiple times.",
+          "Create a single task in the database. Call this once per task. For multiple tasks, call this function multiple times. Set attach_chat_images to true to attach any images the user shared in the conversation.",
         inputSchema: z.object({
           title: z.string().describe("The task title"),
+          description: z
+            .string()
+            .optional()
+            .describe("Task description or notes"),
           priority: z
             .enum(["low", "medium", "high"])
             .optional()
@@ -96,12 +141,29 @@ export async function POST(req: Request) {
             .describe(
               "Due date as YYYY-MM-DD, or natural language like 'tomorrow', 'friday', 'next week'"
             ),
+          attach_chat_images: z
+            .boolean()
+            .optional()
+            .describe(
+              "Set to true to attach all images from the current chat conversation to this task"
+            ),
         }),
-        execute: async ({ title, priority, due_date }) => {
+        execute: async ({ title, description, priority, due_date, attach_chat_images }) => {
           const p = priority ?? "medium";
           const dueDate = due_date ? db.parseDate(due_date) : undefined;
-          const task = await db.createTask({ title, priority: p, dueDate });
-          return { success: true as const, task };
+          const attachments = attach_chat_images ? chatImages : undefined;
+          const task = await db.createTask({
+            title,
+            description,
+            priority: p,
+            dueDate,
+            attachments,
+          });
+          return {
+            success: true as const,
+            task,
+            attachedImages: attach_chat_images ? chatImages.length : 0,
+          };
         },
       }),
 
@@ -142,7 +204,7 @@ export async function POST(req: Request) {
 
       update_task: tool({
         description:
-          "Update a task's status, priority, title, or due date. Find the task by searching its title.",
+          "Update a task's status, priority, title, due date, or attachments. Find the task by searching its title. Set attach_chat_images to true to add images from the conversation.",
         inputSchema: z.object({
           title_search: z
             .string()
@@ -159,17 +221,29 @@ export async function POST(req: Request) {
             .string()
             .optional()
             .describe("New title if renaming"),
+          description: z
+            .string()
+            .optional()
+            .describe("New or updated description"),
           due_date: z
             .string()
             .optional()
             .describe("New due date as YYYY-MM-DD"),
+          attach_chat_images: z
+            .boolean()
+            .optional()
+            .describe(
+              "Set to true to add all images from the current chat conversation to this task's attachments"
+            ),
         }),
         execute: async ({
           title_search,
           status,
           priority,
           new_title,
+          description,
           due_date,
+          attach_chat_images,
         }) => {
           const all = await db.getAllTasks();
           const match = all.find((t) =>
@@ -180,13 +254,23 @@ export async function POST(req: Request) {
               success: false as const,
               error: `No task found matching "${title_search}"`,
             };
-          const updates: Record<string, string> = {};
+          const updates: Record<string, unknown> = {};
           if (status) updates.status = status;
           if (priority) updates.priority = priority;
           if (new_title) updates.title = new_title;
+          if (description) updates.description = description;
           if (due_date) updates.dueDate = due_date;
+          if (attach_chat_images && chatImages.length > 0) {
+            // Merge existing attachments with new chat images
+            const existing = match.attachments ?? [];
+            updates.attachments = [...existing, ...chatImages];
+          }
           const updated = await db.updateTask(match.id, updates);
-          return { success: true as const, task: updated };
+          return {
+            success: true as const,
+            task: updated,
+            attachedImages: attach_chat_images ? chatImages.length : 0,
+          };
         },
       }),
 

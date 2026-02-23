@@ -111,6 +111,18 @@ export function ToolCard({
             Due: {formatDate(task.dueDate)}
           </div>
         )}
+        {(output?.attachedImages as number) > 0 && (
+          <div
+            style={{
+              fontSize: "10px",
+              fontFamily: "monospace",
+              color: "#c084fc",
+              marginTop: "3px",
+            }}
+          >
+            &#x1F4CE; {String(output.attachedImages)} image{(output.attachedImages as number) > 1 ? "s" : ""} attached
+          </div>
+        )}
       </div>
     );
   }

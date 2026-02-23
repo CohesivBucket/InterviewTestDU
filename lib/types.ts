@@ -12,6 +12,7 @@ export interface TaskAttachment {
 export interface Task {
   id: string;
   title: string;
+  description?: string | null;
   priority: Priority;
   status: Status;
   dueDate?: string | null;
