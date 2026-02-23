@@ -5,11 +5,11 @@ import * as db from "@/lib/db";
 
 // Config
 
-const DEFAULT_MODEL = "gpt-4o-mini";
+const DEFAULT_MODEL = "gpt-5-mini";
 const ALLOWED_MODELS = [
-  "gpt-4.1-nano", "gpt-4o-mini", "gpt-4.1-mini",
-  "gpt-4o", "gpt-4.1",
-  "o4-mini", "o3-mini",
+  "gpt-4o-mini", "gpt-5-nano", "gpt-5-mini",
+  "gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.2-pro",
+  "o4-mini",
 ];
 
 // System prompt

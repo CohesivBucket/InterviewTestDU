@@ -23,13 +23,14 @@ interface Task {
 }
 
 const AVAILABLE_MODELS = [
-  { id: "gpt-4.1-nano", label: "GPT-4.1 Nano", description: "Fastest" },
-  { id: "gpt-4o-mini", label: "GPT-4o Mini", description: "Fast & cheap" },
-  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", description: "Balanced" },
-  { id: "gpt-4o", label: "GPT-4o", description: "Strong all-round" },
-  { id: "gpt-4.1", label: "GPT-4.1", description: "Flagship" },
-  { id: "o4-mini", label: "o4-mini", description: "Fast reasoning" },
-  { id: "o3-mini", label: "o3-mini", description: "Reasoning" },
+  { id: "gpt-4o-mini", label: "GPT-4o Mini", description: "Cheapest" },
+  { id: "gpt-5-nano", label: "GPT-5 Nano", description: "Fast & light" },
+  { id: "gpt-5-mini", label: "GPT-5 Mini", description: "Balanced" },
+  { id: "gpt-5", label: "GPT-5", description: "Strong" },
+  { id: "gpt-5.1", label: "GPT-5.1", description: "Smarter" },
+  { id: "gpt-5.2", label: "GPT-5.2", description: "Flagship" },
+  { id: "gpt-5.2-pro", label: "GPT-5.2 Pro", description: "Best quality" },
+  { id: "o4-mini", label: "o4-mini", description: "Reasoning" },
 ];
 
 // Theme tokens
@@ -1067,7 +1068,7 @@ export default function Home() {
   const [started, setStarted] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [theme, setTheme] = useState<Theme>("dark");
-  const [model, setModel] = useState("gpt-4o-mini");
+  const [model, setModel] = useState("gpt-5-mini");
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
