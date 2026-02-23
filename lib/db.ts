@@ -35,8 +35,11 @@ function getClient(): Client {
       authToken: process.env.TURSO_AUTH_TOKEN,
     });
   } else {
-    // Development: local SQLite file (persists across restarts)
-    _client = createClient({ url: "file:./taskflow.db" });
+    // Local SQLite file — use /tmp on Vercel (read-only filesystem), local file otherwise
+    const dbPath = process.env.VERCEL
+      ? "file:/tmp/taskflow.db"
+      : "file:./taskflow.db";
+    _client = createClient({ url: dbPath });
   }
 
   return _client;
