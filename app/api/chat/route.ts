@@ -54,6 +54,7 @@ Always use your tools — never pretend to create or delete tasks without callin
 // POST /api/chat
 
 export async function POST(req: Request) {
+  try {
   const { messages, model: requestedModel } = (await req.json()) as {
     messages: UIMessage[];
     model?: string;
@@ -215,4 +216,12 @@ export async function POST(req: Request) {
   });
 
   return result.toUIMessageStreamResponse();
+  } catch (error: unknown) {
+    console.error("Chat API error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
