@@ -209,8 +209,9 @@ export async function POST(req: Request) {
   // Extract images from the conversation for tool access
   const chatImages = extractChatImages(messages);
 
-  // Closure variable for images generated within this request
+  // Closure variables for image handling within this request
   const generatedImages: TaskAttachment[] = [];
+  const pendingImagePrompts: string[] = []; // Prompts from generate_image tool calls in this request
 
   const selectedModel = ALLOWED_MODELS.includes(requestedModel ?? "")
     ? requestedModel!
@@ -267,19 +268,21 @@ export async function POST(req: Request) {
 
           // AI-generated images
           if (attach_generated_images) {
-            // First check same-request closure
+            // 1. Check already-generated images in this request
             if (generatedImages.length > 0) {
               attachments.push(...generatedImages);
             } else {
-              // Cross-request: find prompts from previous generate_image calls
-              const prompts = extractGeneratedImagePrompts(messages);
-              if (prompts.length > 0) {
-                // Generate from the most recent prompt
-                const latestPrompt = prompts[prompts.length - 1];
+              // 2. Check pending prompts from generate_image calls in this request
+              const promptSource = pendingImagePrompts.length > 0
+                ? pendingImagePrompts
+                : extractGeneratedImagePrompts(messages); // 3. Cross-request fallback
+
+              if (promptSource.length > 0) {
+                const latestPrompt = promptSource[promptSource.length - 1];
                 const img = await generateImageForAttachment(latestPrompt);
                 if (img) {
                   attachments.push(img);
-                  generatedImages.push(img); // Cache for potential re-use
+                  generatedImages.push(img); // Cache for potential re-use in same request
                 }
               }
             }
@@ -409,14 +412,17 @@ export async function POST(req: Request) {
           }
 
           if (attach_generated_images) {
-            // Same-request closure first
+            // 1. Already-generated images in this request
             if (generatedImages.length > 0) {
               newImages.push(...generatedImages);
             } else {
-              // Cross-request: find prompts from previous generate_image calls
-              const prompts = extractGeneratedImagePrompts(messages);
-              if (prompts.length > 0) {
-                const latestPrompt = prompts[prompts.length - 1];
+              // 2. Pending prompts from this request, or 3. cross-request fallback
+              const promptSource = pendingImagePrompts.length > 0
+                ? pendingImagePrompts
+                : extractGeneratedImagePrompts(messages);
+
+              if (promptSource.length > 0) {
+                const latestPrompt = promptSource[promptSource.length - 1];
                 const img = await generateImageForAttachment(latestPrompt);
                 if (img) {
                   newImages.push(img);
@@ -485,11 +491,13 @@ export async function POST(req: Request) {
             ),
         }),
         execute: async ({ prompt }) => {
+          // Store the prompt so create_task/update_task can generate
+          // the image server-side for attachment in the same request.
+          pendingImagePrompts.push(prompt);
+
           // Return lightweight result — the ToolCard fetches the actual image
-          // client-side from /api/generate-image (which checks the API key).
-          // This avoids sending 1MB+ base64 back through the LLM context.
-          // When the user later asks to attach this image to a task, the
-          // create_task/update_task tools will generate it server-side.
+          // client-side from /api/generate-image. This avoids sending 1MB+
+          // base64 through the LLM context.
           return {
             success: true as const,
             prompt,
