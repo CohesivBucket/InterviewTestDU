@@ -14,19 +14,41 @@ const ALLOWED_MODELS = [
 
 // System prompt
 
-function getSystemPrompt(): string {
+async function getSystemPrompt(): Promise<string> {
+  const allTasks = await db.getAllTasks();
+  const taskSummary =
+    allTasks.length > 0
+      ? allTasks
+          .map(
+            (t) =>
+              `- [${t.status}] ${t.title} (${t.priority}${t.dueDate ? `, due ${t.dueDate}` : ""})`
+          )
+          .join("\n")
+      : "No tasks yet.";
+
   return `You are TaskFlow AI — a sharp, efficient task management assistant.
 Today's date: ${new Date().toISOString().split("T")[0]}.
 
+## Current Tasks
+${taskSummary}
+
+## Capabilities
 You have tools to CREATE, READ, UPDATE, and DELETE tasks in a real database.
 Always use your tools — never pretend to create or delete tasks without calling the function.
 
-Rules:
+## Response Style
+- Use **markdown formatting**: headers, bold, lists, code blocks when appropriate
+- Be concise and action-oriented
+- After completing actions, briefly confirm what was done
+- When listing tasks, use structured formatting
+- Proactively suggest next actions when relevant (e.g., "Want me to set a due date?")
+
+## Rules
 - To create multiple tasks: call create_task once for EACH task individually
 - To delete a task: call delete_task with a search string matching the title
 - To mark done: call update_task with status "done"
 - Always confirm what was actually done after tool calls
-- Be concise and action-oriented`;
+- If the user's request is ambiguous, ask for clarification`;
 }
 
 // POST /api/chat
@@ -43,7 +65,7 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: openai(selectedModel),
-    system: getSystemPrompt(),
+    system: await getSystemPrompt(),
     messages: await convertToModelMessages(messages),
     tools: {
       create_task: tool({

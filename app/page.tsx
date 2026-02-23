@@ -4,1072 +4,24 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Task, Filter, Theme, Status } from "@/lib/types";
+import { DARK, LIGHT, formatTime, isOverdue, hover } from "@/lib/theme";
+import { ToolCard } from "@/components/ToolCard";
+import { TaskCard } from "@/components/TaskCard";
+import { ChatHeader } from "@/components/ChatHeader";
+import { EmptyState } from "@/components/EmptyState";
 
-// Types
+// Filter definitions
 
-type Priority = "low" | "medium" | "high";
-type Status = "todo" | "in_progress" | "done";
-type Filter = "all" | "todo" | "in_progress" | "done" | "overdue";
-type Theme = "dark" | "light";
-
-interface Task {
-  id: string;
-  title: string;
-  priority: Priority;
-  status: Status;
-  dueDate?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-const AVAILABLE_MODELS = [
-  { id: "gpt-4o-mini", label: "GPT-4o Mini", description: "Cheapest" },
-  { id: "gpt-5-nano", label: "GPT-5 Nano", description: "Fast & light" },
-  { id: "gpt-5-mini", label: "GPT-5 Mini", description: "Balanced" },
-  { id: "gpt-5", label: "GPT-5", description: "Strong" },
-  { id: "gpt-5.1", label: "GPT-5.1", description: "Smarter" },
-  { id: "gpt-5.2", label: "GPT-5.2", description: "Flagship" },
-  { id: "gpt-5.2-pro", label: "GPT-5.2 Pro", description: "Best quality" },
-  { id: "o4-mini", label: "o4-mini", description: "Reasoning" },
+const FILTER_DEFS: { key: Filter; label: string; icon: string }[] = [
+  { key: "all", label: "All", icon: "\u25C8" },
+  { key: "todo", label: "Todo", icon: "\u25CB" },
+  { key: "in_progress", label: "Active", icon: "\u25D1" },
+  { key: "done", label: "Done", icon: "\u25CF" },
+  { key: "overdue", label: "Overdue", icon: "\u26A0" },
 ];
-
-// Theme tokens
-
-const DARK = {
-  bg: "#080810",
-  bgSecondary: "rgba(255,255,255,0.02)",
-  border: "rgba(255,255,255,0.06)",
-  borderHover: "rgba(255,255,255,0.12)",
-  text: "rgba(255,255,255,0.85)",
-  textMuted: "rgba(255,255,255,0.3)",
-  textFaint: "rgba(255,255,255,0.15)",
-  inputBg: "rgba(255,255,255,0.05)",
-  msgBg: "rgba(255,255,255,0.05)",
-  cardBg: "rgba(255,255,255,0.04)",
-  cardHover: "rgba(255,255,255,0.06)",
-  accent: "#8b5cf6",
-  accentSoft: "rgba(139,92,246,0.12)",
-  filterActive: "rgba(139,92,246,0.12)",
-  filterActiveText: "#a78bfa",
-  suggestionBg: "rgba(255,255,255,0.04)",
-  suggestionBorder: "rgba(255,255,255,0.08)",
-  userMsg: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-  userAvatar: "rgba(139,92,246,0.15)",
-  headerBg: "rgba(8,8,16,0.8)",
-  toolCardBg: "rgba(139,92,246,0.06)",
-  toolCardBorder: "rgba(139,92,246,0.15)",
-};
-
-const LIGHT = {
-  bg: "#f8f7ff",
-  bgSecondary: "rgba(0,0,0,0.02)",
-  border: "rgba(0,0,0,0.08)",
-  borderHover: "rgba(0,0,0,0.15)",
-  text: "rgba(0,0,0,0.85)",
-  textMuted: "rgba(0,0,0,0.4)",
-  textFaint: "rgba(0,0,0,0.2)",
-  inputBg: "rgba(0,0,0,0.04)",
-  msgBg: "rgba(0,0,0,0.04)",
-  cardBg: "rgba(0,0,0,0.03)",
-  cardHover: "rgba(0,0,0,0.06)",
-  accent: "#7c3aed",
-  accentSoft: "rgba(124,58,237,0.08)",
-  filterActive: "rgba(124,58,237,0.1)",
-  filterActiveText: "#7c3aed",
-  suggestionBg: "rgba(0,0,0,0.03)",
-  suggestionBorder: "rgba(0,0,0,0.08)",
-  userMsg: "linear-gradient(135deg, #7c3aed, #6d28d9)",
-  userAvatar: "rgba(124,58,237,0.12)",
-  headerBg: "rgba(248,247,255,0.9)",
-  toolCardBg: "rgba(124,58,237,0.04)",
-  toolCardBorder: "rgba(124,58,237,0.1)",
-};
-
-// Visual constants
-
-const PRIORITY_COLOR: Record<Priority, string> = {
-  high: "#f87171",
-  medium: "#fb923c",
-  low: "#34d399",
-};
-
-const PRIORITY_BG: Record<Priority, string> = {
-  high: "rgba(248,113,113,0.1)",
-  medium: "rgba(251,146,60,0.1)",
-  low: "rgba(52,211,153,0.1)",
-};
-
-const STATUS_COLOR: Record<Status, string> = {
-  todo: "#a78bfa",
-  in_progress: "#fbbf24",
-  done: "#34d399",
-};
-
-const SUGGESTIONS = [
-  "Add task 'Review Q1 report' due Friday high priority",
-  "What tasks are overdue?",
-  "Show my top priorities",
-  "Mark Buy milk as done",
-];
-
-// Helpers
-
-/** Spread onto a button/div to apply hover styles without CSS classes. */
-function hover(
-  on: Record<string, string>,
-  off?: Record<string, string>,
-) {
-  const reset =
-    off ??
-    Object.fromEntries(
-      Object.keys(on).map((k) => [k, k === "background" ? "transparent" : ""]),
-    );
-  return {
-    onMouseEnter: (e: React.MouseEvent) =>
-      Object.assign((e.currentTarget as HTMLElement).style, on),
-    onMouseLeave: (e: React.MouseEvent) =>
-      Object.assign((e.currentTarget as HTMLElement).style, reset),
-  };
-}
-
-function formatDate(d: string | null | undefined): string {
-  if (!d) return "";
-  const date = new Date(d + "T00:00:00");
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diff = Math.floor((date.getTime() - today.getTime()) / 86400000);
-  if (diff === 0) return "Today";
-  if (diff === 1) return "Tomorrow";
-  if (diff === -1) return "Yesterday";
-  if (diff < 0) return `${Math.abs(diff)}d overdue`;
-  if (diff < 7) return date.toLocaleDateString("en-US", { weekday: "short" });
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function isOverdue(t: Task): boolean {
-  if (!t.dueDate || t.status === "done") return false;
-  return t.dueDate < new Date().toISOString().split("T")[0];
-}
-
-function formatTime(d: Date): string {
-  return d.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-// ToolCard — structured UI for tool invocations inside chat messages
-//
-// AI SDK v6 UIMessage parts use:
-//   type: "tool-<name>" | "dynamic-tool"
-//   input (not args), output (not result)
-//   state: "input-streaming" | "input-available" | "output-available" | "output-error"
-
-function ToolCard({
-  part,
-  t: theme,
-}: {
-  part: Record<string, unknown>;
-  t: typeof DARK;
-}) {
-  // Normalize field access across typed ("tool-X") and dynamic ("dynamic-tool") parts
-  const toolName =
-    (part.toolName as string) ??
-    (typeof part.type === "string" && (part.type as string).startsWith("tool-")
-      ? (part.type as string).slice(5)
-      : "unknown");
-
-  const output = part.output as Record<string, unknown> | undefined;
-  const input = part.input as Record<string, unknown> | undefined;
-  const state = part.state as string;
-
-  const isSuccess = state === "output-available" && output?.success === true;
-  const isError =
-    state === "output-error" ||
-    (state === "output-available" && output?.success === false);
-  const isLoading =
-    state === "input-streaming" || state === "input-available";
-
-  // create_task
-  if (toolName === "create_task" && isSuccess && output?.task) {
-    const task = output.task as Task;
-    return (
-      <div
-        style={{
-          background: theme.toolCardBg,
-          borderTop: `1px solid ${theme.toolCardBorder}`,
-          borderRight: `1px solid ${theme.toolCardBorder}`,
-          borderBottom: `1px solid ${theme.toolCardBorder}`,
-          borderLeft: `3px solid ${PRIORITY_COLOR[task.priority] ?? theme.accent}`,
-          borderRadius: "10px",
-          padding: "10px 14px",
-          marginBottom: "6px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: "6px",
-            alignItems: "center",
-            marginBottom: "4px",
-          }}
-        >
-          <span style={{ fontSize: "12px" }}>+</span>
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              letterSpacing: "0.1em",
-              color: "#34d399",
-              fontWeight: 700,
-            }}
-          >
-            CREATED
-          </span>
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              letterSpacing: "0.12em",
-              fontWeight: 700,
-              color: PRIORITY_COLOR[task.priority] ?? theme.textMuted,
-              background: PRIORITY_BG[task.priority] ?? "transparent",
-              padding: "2px 6px",
-              borderRadius: "4px",
-            }}
-          >
-            {task.priority?.toUpperCase()}
-          </span>
-        </div>
-        <div
-          style={{
-            fontSize: "13px",
-            fontWeight: 600,
-            color: theme.text,
-            marginBottom: "2px",
-          }}
-        >
-          {task.title}
-        </div>
-        {task.dueDate && (
-          <div
-            style={{
-              fontSize: "11px",
-              fontFamily: "monospace",
-              color: theme.textMuted,
-            }}
-          >
-            Due: {formatDate(task.dueDate)}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // get_tasks
-  if (toolName === "get_tasks" && isSuccess && output?.tasks) {
-    const tasks = output.tasks as Task[];
-    if (tasks.length === 0) {
-      return (
-        <div
-          style={{
-            background: theme.toolCardBg,
-            border: `1px solid ${theme.toolCardBorder}`,
-            borderRadius: "10px",
-            padding: "10px 14px",
-            marginBottom: "6px",
-            fontSize: "12px",
-            color: theme.textMuted,
-            fontFamily: "monospace",
-          }}
-        >
-          No tasks found
-        </div>
-      );
-    }
-    return (
-      <div
-        style={{
-          background: theme.toolCardBg,
-          border: `1px solid ${theme.toolCardBorder}`,
-          borderRadius: "10px",
-          padding: "8px",
-          marginBottom: "6px",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "9px",
-            fontFamily: "monospace",
-            letterSpacing: "0.1em",
-            color: theme.textMuted,
-            padding: "2px 6px",
-            marginBottom: "4px",
-          }}
-        >
-          {tasks.length} TASK{tasks.length !== 1 ? "S" : ""}
-        </div>
-        {tasks.map((task) => (
-          <div
-            key={task.id}
-            style={{
-              borderLeft: `3px solid ${task.status === "done" ? theme.border : (PRIORITY_COLOR[task.priority] ?? theme.accent)}`,
-              padding: "6px 10px",
-              marginBottom: "4px",
-              borderRadius: "0 6px 6px 0",
-              background: theme.cardBg,
-              opacity: task.status === "done" ? 0.5 : 1,
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                gap: "5px",
-                alignItems: "center",
-                marginBottom: "2px",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "8px",
-                  fontFamily: "monospace",
-                  fontWeight: 700,
-                  color: PRIORITY_COLOR[task.priority] ?? theme.textMuted,
-                  letterSpacing: "0.1em",
-                }}
-              >
-                {task.priority?.toUpperCase()}
-              </span>
-              <span
-                style={{
-                  fontSize: "8px",
-                  fontFamily: "monospace",
-                  fontWeight: 600,
-                  color: STATUS_COLOR[task.status] ?? theme.textMuted,
-                }}
-              >
-                {task.status === "in_progress"
-                  ? "ACTIVE"
-                  : task.status?.toUpperCase()}
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: "12px",
-                fontWeight: 500,
-                color: theme.text,
-                textDecoration:
-                  task.status === "done" ? "line-through" : "none",
-              }}
-            >
-              {task.title}
-            </div>
-            {task.dueDate && (
-              <div
-                style={{
-                  fontSize: "10px",
-                  fontFamily: "monospace",
-                  color: theme.textMuted,
-                  marginTop: "2px",
-                }}
-              >
-                {formatDate(task.dueDate)}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // update_task
-  if (toolName === "update_task" && isSuccess && output?.task) {
-    const task = output.task as Task;
-    return (
-      <div
-        style={{
-          background: theme.toolCardBg,
-          borderTop: `1px solid ${theme.toolCardBorder}`,
-          borderRight: `1px solid ${theme.toolCardBorder}`,
-          borderBottom: `1px solid ${theme.toolCardBorder}`,
-          borderLeft: `3px solid ${STATUS_COLOR[task.status] ?? theme.accent}`,
-          borderRadius: "10px",
-          padding: "10px 14px",
-          marginBottom: "6px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: "6px",
-            alignItems: "center",
-            marginBottom: "4px",
-          }}
-        >
-          <span style={{ fontSize: "12px" }}>&#x270E;</span>
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              letterSpacing: "0.1em",
-              color: "#fbbf24",
-              fontWeight: 700,
-            }}
-          >
-            UPDATED
-          </span>
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              fontWeight: 600,
-              color: STATUS_COLOR[task.status] ?? theme.textMuted,
-            }}
-          >
-            {task.status === "in_progress"
-              ? "ACTIVE"
-              : task.status?.toUpperCase()}
-          </span>
-        </div>
-        <div style={{ fontSize: "13px", fontWeight: 600, color: theme.text }}>
-          {task.title}
-        </div>
-      </div>
-    );
-  }
-
-  // delete_task
-  if (toolName === "delete_task" && isSuccess) {
-    return (
-      <div
-        style={{
-          background: theme.toolCardBg,
-          borderTop: `1px solid ${theme.toolCardBorder}`,
-          borderRight: `1px solid ${theme.toolCardBorder}`,
-          borderBottom: `1px solid ${theme.toolCardBorder}`,
-          borderLeft: "3px solid #f87171",
-          borderRadius: "10px",
-          padding: "10px 14px",
-          marginBottom: "6px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: "6px",
-            alignItems: "center",
-          }}
-        >
-          <span style={{ fontSize: "12px" }}>&#x2716;</span>
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              letterSpacing: "0.1em",
-              color: "#f87171",
-              fontWeight: 700,
-            }}
-          >
-            DELETED
-          </span>
-          <span
-            style={{ fontSize: "12px", color: theme.textMuted, fontWeight: 500 }}
-          >
-            {String(output?.deleted ?? "")}
-          </span>
-        </div>
-      </div>
-    );
-  }
-
-  // delete_all_tasks
-  if (toolName === "delete_all_tasks" && isSuccess) {
-    return (
-      <div
-        style={{
-          background: theme.toolCardBg,
-          borderTop: `1px solid ${theme.toolCardBorder}`,
-          borderRight: `1px solid ${theme.toolCardBorder}`,
-          borderBottom: `1px solid ${theme.toolCardBorder}`,
-          borderLeft: "3px solid #f87171",
-          borderRadius: "10px",
-          padding: "10px 14px",
-          marginBottom: "6px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: "6px",
-            alignItems: "center",
-          }}
-        >
-          <span style={{ fontSize: "12px" }}>&#x2716;</span>
-          <span
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              letterSpacing: "0.1em",
-              color: "#f87171",
-              fontWeight: 700,
-            }}
-          >
-            CLEARED
-          </span>
-          <span
-            style={{
-              fontSize: "12px",
-              color: theme.textMuted,
-              fontFamily: "monospace",
-            }}
-          >
-            {String(output?.deleted_count ?? 0)} tasks removed
-          </span>
-        </div>
-      </div>
-    );
-  }
-
-  // Error fallback
-  if (isError) {
-    return (
-      <div
-        style={{
-          background: "rgba(248,113,113,0.06)",
-          border: "1px solid rgba(248,113,113,0.2)",
-          borderRadius: "10px",
-          padding: "10px 14px",
-          marginBottom: "6px",
-          fontSize: "12px",
-          color: "#f87171",
-          fontFamily: "monospace",
-        }}
-      >
-        {String(output?.error ?? (part.errorText as string) ?? "Tool call failed")}
-      </div>
-    );
-  }
-
-  // Loading
-  if (isLoading) {
-    return (
-      <div
-        style={{
-          background: theme.toolCardBg,
-          border: `1px solid ${theme.toolCardBorder}`,
-          borderRadius: "10px",
-          padding: "10px 14px",
-          marginBottom: "6px",
-          fontSize: "11px",
-          color: theme.textMuted,
-          fontFamily: "monospace",
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-        }}
-      >
-        <span style={{ animation: "pulse 1.5s infinite" }}>&#x25C8;</span>
-        Calling {toolName?.replace(/_/g, " ")}...
-      </div>
-    );
-  }
-
-  // Generic fallback
-  return (
-    <div
-      style={{
-        background: theme.toolCardBg,
-        border: `1px solid ${theme.toolCardBorder}`,
-        borderRadius: "10px",
-        padding: "8px 12px",
-        marginBottom: "6px",
-        fontSize: "11px",
-        color: theme.textMuted,
-        fontFamily: "monospace",
-      }}
-    >
-      {toolName}: {input ? JSON.stringify(input) : "done"}
-    </div>
-  );
-}
-
-// TaskCard — sidebar task with inline editing
-
-function TaskCard({
-  task,
-  onStatusChange,
-  onDelete,
-  onEdit,
-  t: theme,
-}: {
-  task: Task;
-  onStatusChange: (id: string, status: Status) => void;
-  onDelete: (id: string) => void;
-  onEdit: (id: string, updates: Partial<Task>) => void;
-  t: typeof DARK;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState(task.title);
-  const [editPriority, setEditPriority] = useState<Priority>(task.priority);
-  const [editStatus, setEditStatus] = useState<Status>(task.status);
-  const [editDueDate, setEditDueDate] = useState(task.dueDate ?? "");
-  const overdue = isOverdue(task);
-  const done = task.status === "done";
-
-  const startEditing = () => {
-    setEditTitle(task.title);
-    setEditPriority(task.priority);
-    setEditStatus(task.status);
-    setEditDueDate(task.dueDate ?? "");
-    setEditing(true);
-  };
-
-  const saveEdit = () => {
-    const updates: Partial<Task> = {};
-    if (editTitle.trim() && editTitle !== task.title)
-      updates.title = editTitle.trim();
-    if (editPriority !== task.priority) updates.priority = editPriority;
-    if (editStatus !== task.status) updates.status = editStatus;
-    const newDue = editDueDate || null;
-    if (newDue !== (task.dueDate ?? null)) updates.dueDate = newDue;
-    if (Object.keys(updates).length > 0) onEdit(task.id, updates);
-    setEditing(false);
-  };
-
-  const cancelEdit = () => setEditing(false);
-
-  // Edit mode
-  if (editing) {
-    return (
-      <div
-        style={{
-          background: theme.cardHover,
-          borderTop: `1px solid ${theme.accent}`,
-          borderRight: `1px solid ${theme.accent}`,
-          borderBottom: `1px solid ${theme.accent}`,
-          borderLeft: `3px solid ${PRIORITY_COLOR[editPriority]}`,
-          borderRadius: "10px",
-          padding: "12px 14px",
-          marginBottom: "8px",
-          transition: "all 0.15s ease",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Title input */}
-        <input
-          value={editTitle}
-          onChange={(e) => setEditTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") saveEdit();
-            if (e.key === "Escape") cancelEdit();
-          }}
-          autoFocus
-          style={{
-            width: "100%",
-            background: theme.inputBg,
-            border: `1px solid ${theme.border}`,
-            borderRadius: "6px",
-            padding: "7px 10px",
-            color: theme.text,
-            fontSize: "13px",
-            fontFamily: "'Syne', sans-serif",
-            marginBottom: "8px",
-          }}
-        />
-
-        {/* Priority toggles */}
-        <div style={{ marginBottom: "6px" }}>
-          <div
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              color: theme.textMuted,
-              marginBottom: "4px",
-              letterSpacing: "0.1em",
-            }}
-          >
-            PRIORITY
-          </div>
-          <div style={{ display: "flex", gap: "4px" }}>
-            {(["low", "medium", "high"] as Priority[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setEditPriority(p)}
-                style={{
-                  flex: 1,
-                  padding: "4px 0",
-                  borderRadius: "5px",
-                  border: `1.5px solid ${editPriority === p ? PRIORITY_COLOR[p] : theme.border}`,
-                  background:
-                    editPriority === p ? PRIORITY_BG[p] : "transparent",
-                  color:
-                    editPriority === p ? PRIORITY_COLOR[p] : theme.textMuted,
-                  fontSize: "10px",
-                  fontWeight: 700,
-                  fontFamily: "monospace",
-                  cursor: "pointer",
-                  letterSpacing: "0.05em",
-                  transition: "all 0.12s",
-                }}
-              >
-                {p.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Status toggles */}
-        <div style={{ marginBottom: "6px" }}>
-          <div
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              color: theme.textMuted,
-              marginBottom: "4px",
-              letterSpacing: "0.1em",
-            }}
-          >
-            STATUS
-          </div>
-          <div style={{ display: "flex", gap: "4px" }}>
-            {(
-              [
-                ["todo", "Todo", "#a78bfa"],
-                ["in_progress", "Active", "#fbbf24"],
-                ["done", "Done", "#34d399"],
-              ] as [Status, string, string][]
-            ).map(([s, label, color]) => (
-              <button
-                key={s}
-                onClick={() => setEditStatus(s)}
-                style={{
-                  flex: 1,
-                  padding: "4px 0",
-                  borderRadius: "5px",
-                  border: `1.5px solid ${editStatus === s ? color : theme.border}`,
-                  background:
-                    editStatus === s ? `${color}18` : "transparent",
-                  color: editStatus === s ? color : theme.textMuted,
-                  fontSize: "10px",
-                  fontWeight: 700,
-                  fontFamily: "monospace",
-                  cursor: "pointer",
-                  letterSpacing: "0.05em",
-                  transition: "all 0.12s",
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Due date */}
-        <div style={{ marginBottom: "8px" }}>
-          <div
-            style={{
-              fontSize: "9px",
-              fontFamily: "monospace",
-              color: theme.textMuted,
-              marginBottom: "4px",
-              letterSpacing: "0.1em",
-            }}
-          >
-            DUE DATE
-          </div>
-          <input
-            type="date"
-            value={editDueDate}
-            onChange={(e) => setEditDueDate(e.target.value)}
-            style={{
-              width: "100%",
-              background: theme.inputBg,
-              border: `1px solid ${theme.border}`,
-              borderRadius: "6px",
-              padding: "5px 8px",
-              color: theme.text,
-              fontSize: "11px",
-              fontFamily: "'DM Mono', monospace",
-              colorScheme: theme === DARK ? "dark" : "light",
-            }}
-          />
-        </div>
-
-        {/* Save / Cancel */}
-        <div style={{ display: "flex", gap: "6px" }}>
-          <button
-            onClick={saveEdit}
-            style={{
-              flex: 1,
-              padding: "6px 0",
-              borderRadius: "6px",
-              border: "none",
-              background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-              color: "#fff",
-              fontSize: "11px",
-              fontWeight: 700,
-              fontFamily: "'Syne', sans-serif",
-              cursor: "pointer",
-              transition: "all 0.15s",
-            }}
-          >
-            Save
-          </button>
-          <button
-            onClick={cancelEdit}
-            style={{
-              flex: 1,
-              padding: "6px 0",
-              borderRadius: "6px",
-              border: `1px solid ${theme.border}`,
-              background: "transparent",
-              color: theme.textMuted,
-              fontSize: "11px",
-              fontWeight: 600,
-              fontFamily: "'Syne', sans-serif",
-              cursor: "pointer",
-              transition: "all 0.15s",
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Normal view
-  return (
-    <div
-      onClick={() => setExpanded(!expanded)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        background: hovered && !done ? theme.cardHover : theme.cardBg,
-        borderTop: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
-        borderRight: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
-        borderBottom: `1px solid ${overdue ? "rgba(248,113,113,0.3)" : theme.border}`,
-        borderLeft: `3px solid ${done ? theme.border : PRIORITY_COLOR[task.priority]}`,
-        borderRadius: "10px",
-        padding: "12px 14px",
-        marginBottom: "8px",
-        cursor: "pointer",
-        opacity: done ? 0.5 : 1,
-        transition: "all 0.15s ease",
-        userSelect: "none",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: "8px",
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              display: "flex",
-              gap: "5px",
-              alignItems: "center",
-              marginBottom: "5px",
-              flexWrap: "wrap",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "9px",
-                fontFamily: "monospace",
-                letterSpacing: "0.12em",
-                fontWeight: 700,
-                color: done
-                  ? theme.textFaint
-                  : PRIORITY_COLOR[task.priority],
-                background: done ? "transparent" : PRIORITY_BG[task.priority],
-                padding: "2px 6px",
-                borderRadius: "4px",
-              }}
-            >
-              {task.priority.toUpperCase()}
-            </span>
-            {overdue && (
-              <span
-                style={{
-                  fontSize: "9px",
-                  background: "rgba(248,113,113,0.12)",
-                  color: "#f87171",
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                  fontWeight: 600,
-                }}
-              >
-                OVERDUE
-              </span>
-            )}
-            {done && (
-              <span
-                style={{
-                  fontSize: "9px",
-                  background: "rgba(52,211,153,0.1)",
-                  color: "#34d399",
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                  fontWeight: 600,
-                }}
-              >
-                DONE
-              </span>
-            )}
-            {task.status === "in_progress" && !done && (
-              <span
-                style={{
-                  fontSize: "9px",
-                  background: "rgba(251,191,36,0.1)",
-                  color: "#fbbf24",
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                  fontWeight: 600,
-                }}
-              >
-                ACTIVE
-              </span>
-            )}
-          </div>
-          <div
-            style={{
-              fontSize: "13px",
-              fontWeight: 500,
-              color: done ? theme.textMuted : theme.text,
-              textDecoration: done ? "line-through" : "none",
-              lineHeight: 1.4,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: expanded ? "normal" : "nowrap",
-            }}
-          >
-            {task.title}
-          </div>
-          {task.dueDate && (
-            <div
-              style={{
-                fontSize: "11px",
-                color: overdue ? "#f87171" : theme.textMuted,
-                marginTop: "4px",
-                fontFamily: "monospace",
-              }}
-            >
-              {formatDate(task.dueDate)}
-            </div>
-          )}
-        </div>
-
-        <div
-          style={{ display: "flex", gap: "4px", flexShrink: 0 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Edit button */}
-          <button
-            onClick={startEditing}
-            title="Edit task"
-            style={{
-              width: "26px",
-              height: "26px",
-              borderRadius: "50%",
-              border: "1.5px solid rgba(139,92,246,0.4)",
-              background: "transparent",
-              cursor: "pointer",
-              color: "#a78bfa",
-              fontSize: "11px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "all 0.15s",
-            }}
-            {...hover({ background: "rgba(139,92,246,0.15)" })}
-          >
-            &#x270E;
-          </button>
-          {!done && (
-            <button
-              onClick={() => onStatusChange(task.id, "done")}
-              title="Mark done"
-              style={{
-                width: "26px",
-                height: "26px",
-                borderRadius: "50%",
-                border: "1.5px solid rgba(52,211,153,0.4)",
-                background: "transparent",
-                cursor: "pointer",
-                color: "#34d399",
-                fontSize: "12px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all 0.15s",
-              }}
-              {...hover({ background: "rgba(52,211,153,0.15)" })}
-            >
-              &#x2713;
-            </button>
-          )}
-          {task.status !== "in_progress" && !done && (
-            <button
-              onClick={() => onStatusChange(task.id, "in_progress")}
-              title="Start task"
-              style={{
-                width: "26px",
-                height: "26px",
-                borderRadius: "50%",
-                border: "1.5px solid rgba(251,191,36,0.4)",
-                background: "transparent",
-                cursor: "pointer",
-                color: "#fbbf24",
-                fontSize: "10px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all 0.15s",
-              }}
-              {...hover({ background: "rgba(251,191,36,0.15)" })}
-            >
-              &#x25B6;
-            </button>
-          )}
-          <button
-            onClick={() => onDelete(task.id)}
-            title="Delete"
-            style={{
-              width: "26px",
-              height: "26px",
-              borderRadius: "50%",
-              border: `1.5px solid ${theme.border}`,
-              background: "transparent",
-              cursor: "pointer",
-              color: theme.textMuted,
-              fontSize: "12px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "all 0.15s",
-            }}
-            {...hover(
-              { background: "rgba(248,113,113,0.12)", color: "#f87171" },
-              { background: "transparent", color: theme.textMuted },
-            )}
-          >
-            &#x00D7;
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Root page component
 
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -1084,6 +36,7 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messageTimestamps = useRef<Map<string, Date>>(new Map());
 
   const T = theme === "dark" ? DARK : LIGHT;
 
@@ -1100,12 +53,7 @@ export default function Home() {
       })
   );
 
-  const {
-    messages,
-    sendMessage,
-    status,
-    setMessages,
-  } = useChat({
+  const { messages, sendMessage, stop, status, setMessages } = useChat({
     transport: chatTransport,
     onFinish: () => {
       fetchTasks();
@@ -1118,6 +66,7 @@ export default function Home() {
   const isLoading = status === "streaming" || status === "submitted";
 
   // Persist theme
+
   useEffect(() => {
     const saved = localStorage.getItem("taskflow-theme") as Theme | null;
     if (saved) setTheme(saved);
@@ -1128,6 +77,17 @@ export default function Home() {
     setTheme(next);
     localStorage.setItem("taskflow-theme", next);
   };
+
+  // Track message timestamps (fixes re-render bug)
+
+  useEffect(() => {
+    const now = new Date();
+    for (const msg of messages) {
+      if (!messageTimestamps.current.has(msg.id)) {
+        messageTimestamps.current.set(msg.id, now);
+      }
+    }
+  }, [messages]);
 
   // Image attachments
 
@@ -1166,9 +126,30 @@ export default function Home() {
   useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  // Keyboard shortcuts
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isModKey = e.metaKey || e.ctrlKey;
+
+      if (isModKey && e.key === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+
+      if (e.key === "Escape") {
+        if (showModelPicker) setShowModelPicker(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showModelPicker]);
 
   // Sidebar task mutations
 
@@ -1221,7 +202,9 @@ export default function Home() {
     setPendingImages([]);
 
     await sendMessage({
-      text: text || "I've attached an image. Please describe what you see and how it relates to my tasks.",
+      text:
+        text ||
+        "I've attached an image. Please describe what you see and how it relates to my tasks.",
       files,
     });
 
@@ -1244,13 +227,11 @@ export default function Home() {
     return t.status === filter;
   });
 
-  const filterDefs: { key: Filter; label: string; icon: string }[] = [
-    { key: "all", label: "All", icon: "\u25C8" },
-    { key: "todo", label: "Todo", icon: "\u25CB" },
-    { key: "in_progress", label: "Active", icon: "\u25D1" },
-    { key: "done", label: "Done", icon: "\u25CF" },
-    { key: "overdue", label: "Overdue", icon: "\u26A0" },
-  ];
+  const handleSuggestionClick = (text: string) => {
+    setInput(text);
+    setStarted(true);
+    inputRef.current?.focus();
+  };
 
   // Render
 
@@ -1276,19 +257,85 @@ export default function Home() {
         }
 
         .msg-enter { animation: fadeUp 0.25s ease forwards; }
-
         .send-btn:hover:not(:disabled) { transform: scale(1.05) !important; }
         .send-btn:active:not(:disabled) { transform: scale(0.95) !important; }
-
         .suggestion-btn:hover {
           border-color: rgba(139,92,246,0.4) !important;
           color: #a78bfa !important;
         }
-
         input:focus {
           outline: none;
           border-color: rgba(139,92,246,0.5) !important;
           box-shadow: 0 0 0 3px rgba(139,92,246,0.08) !important;
+        }
+
+        /* Markdown styles for AI responses */
+        .markdown-body { line-height: 1.65; }
+        .markdown-body p { margin: 0 0 8px; }
+        .markdown-body p:last-child { margin-bottom: 0; }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+          margin: 12px 0 6px;
+          font-weight: 700;
+          line-height: 1.3;
+        }
+        .markdown-body h1 { font-size: 18px; }
+        .markdown-body h2 { font-size: 16px; }
+        .markdown-body h3 { font-size: 14px; }
+        .markdown-body ul, .markdown-body ol {
+          padding-left: 20px;
+          margin: 6px 0;
+        }
+        .markdown-body li { margin: 3px 0; }
+        .markdown-body code {
+          font-family: 'DM Mono', monospace;
+          font-size: 12px;
+          padding: 2px 6px;
+          border-radius: 4px;
+          background: rgba(139,92,246,0.12);
+        }
+        .markdown-body pre {
+          margin: 8px 0;
+          padding: 12px;
+          border-radius: 8px;
+          overflow-x: auto;
+          background: rgba(0,0,0,0.3) !important;
+        }
+        .markdown-body pre code {
+          padding: 0;
+          background: transparent;
+          font-size: 12px;
+        }
+        .markdown-body strong { font-weight: 700; }
+        .markdown-body em { font-style: italic; }
+        .markdown-body blockquote {
+          border-left: 3px solid rgba(139,92,246,0.4);
+          padding: 4px 12px;
+          margin: 8px 0;
+          opacity: 0.85;
+        }
+        .markdown-body table {
+          border-collapse: collapse;
+          margin: 8px 0;
+          font-size: 12px;
+          width: 100%;
+        }
+        .markdown-body th, .markdown-body td {
+          padding: 6px 10px;
+          border: 1px solid rgba(128,128,128,0.2);
+          text-align: left;
+        }
+        .markdown-body th {
+          font-weight: 700;
+          background: rgba(139,92,246,0.08);
+        }
+        .markdown-body hr {
+          border: none;
+          border-top: 1px solid rgba(128,128,128,0.2);
+          margin: 12px 0;
+        }
+        .markdown-body a {
+          color: #a78bfa;
+          text-decoration: underline;
         }
       `}</style>
 
@@ -1302,7 +349,7 @@ export default function Home() {
           transition: "background 0.3s ease, color 0.3s ease",
         }}
       >
-        {/* Ambient glows — dark mode only */}
+        {/* Ambient glows */}
         {theme === "dark" && (
           <>
             <div
@@ -1334,7 +381,7 @@ export default function Home() {
           </>
         )}
 
-        {/* ── Sidebar ── */}
+        {/* Sidebar */}
         <div
           style={{
             width: isSidebarOpen ? "280px" : "0px",
@@ -1350,7 +397,6 @@ export default function Home() {
           }}
         >
           <div style={{ padding: "24px 18px 0", minWidth: "280px" }}>
-            {/* Logo */}
             <div
               style={{
                 display: "flex",
@@ -1420,7 +466,7 @@ export default function Home() {
                 marginBottom: "16px",
               }}
             >
-              {filterDefs.map((f) => (
+              {FILTER_DEFS.map((f) => (
                 <button
                   key={f.key}
                   onClick={() => setFilter(f.key)}
@@ -1551,7 +597,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* ── Main chat ── */}
+        {/* Main chat area */}
         <div
           style={{
             flex: 1,
@@ -1562,201 +608,17 @@ export default function Home() {
             zIndex: 1,
           }}
         >
-          {/* Header */}
-          <div
-            style={{
-              padding: "14px 20px",
-              borderBottom: `1px solid ${T.border}`,
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              backdropFilter: "blur(10px)",
-              background: T.headerBg,
-            }}
-          >
-            <button
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              style={{
-                width: "30px",
-                height: "30px",
-                borderRadius: "8px",
-                border: `1px solid ${T.border}`,
-                background: "transparent",
-                cursor: "pointer",
-                color: T.textMuted,
-                fontSize: "12px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "all 0.15s",
-                flexShrink: 0,
-              }}
-              {...hover({ background: T.cardHover })}
-            >
-              {isSidebarOpen ? "\u25C0" : "\u25B6"}
-            </button>
-
-            {/* Status */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-              }}
-            >
-              <div
-                style={{
-                  width: "7px",
-                  height: "7px",
-                  borderRadius: "50%",
-                  background: "#34d399",
-                  animation: "pulse 2.5s infinite",
-                }}
-              />
-              <span
-                style={{
-                  fontSize: "13px",
-                  fontWeight: 600,
-                  color: T.textMuted,
-                }}
-              >
-                AI Assistant
-              </span>
-            </div>
-
-            {/* Right side controls */}
-            <div
-              style={{
-                marginLeft: "auto",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-              }}
-            >
-              {/* Model selector */}
-              <div style={{ position: "relative" }}>
-                <button
-                  onClick={() => setShowModelPicker(!showModelPicker)}
-                  style={{
-                    fontSize: "10px",
-                    fontFamily: "'DM Mono', monospace",
-                    color: T.textMuted,
-                    background: T.inputBg,
-                    padding: "4px 10px",
-                    borderRadius: "6px",
-                    border: `1px solid ${showModelPicker ? T.accent : T.border}`,
-                    cursor: "pointer",
-                    transition: "all 0.15s",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                  }}
-                  {...hover(
-                    { borderColor: T.borderHover },
-                    { borderColor: showModelPicker ? T.accent : T.border },
-                  )}
-                >
-                  &#x25C8; {model}{" "}
-                  <span style={{ fontSize: "8px", opacity: 0.5 }}>
-                    &#x25BC;
-                  </span>
-                </button>
-                {showModelPicker && (
-                  <>
-                    <div
-                      style={{ position: "fixed", inset: 0, zIndex: 9998 }}
-                      onClick={() => setShowModelPicker(false)}
-                    />
-                    <div
-                      style={{
-                        position: "fixed",
-                        top: "52px",
-                        right: "52px",
-                        zIndex: 9999,
-                        background:
-                          theme === "dark" ? "#1a1a2e" : "#fff",
-                        border: `1px solid ${T.border}`,
-                        borderRadius: "8px",
-                        padding: "4px",
-                        minWidth: "200px",
-                        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                      }}
-                    >
-                      {AVAILABLE_MODELS.map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => {
-                            setModel(m.id);
-                            setShowModelPicker(false);
-                          }}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            width: "100%",
-                            padding: "8px 10px",
-                            borderRadius: "6px",
-                            border: "none",
-                            background:
-                              model === m.id
-                                ? T.accentSoft
-                                : "transparent",
-                            color:
-                              model === m.id
-                                ? T.filterActiveText
-                                : T.text,
-                            fontSize: "11px",
-                            fontFamily: "'DM Mono', monospace",
-                            cursor: "pointer",
-                            transition: "all 0.1s",
-                          }}
-                          {...(model !== m.id
-                            ? hover({ background: T.cardHover })
-                            : {})}
-                        >
-                          <span>{m.label}</span>
-                          <span
-                            style={{
-                              fontSize: "9px",
-                              color: T.textMuted,
-                            }}
-                          >
-                            {m.description}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Theme toggle */}
-              <button
-                onClick={toggleTheme}
-                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-                style={{
-                  width: "32px",
-                  height: "32px",
-                  borderRadius: "8px",
-                  border: `1px solid ${T.border}`,
-                  background: "transparent",
-                  cursor: "pointer",
-                  color: T.textMuted,
-                  fontSize: "15px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  transition: "all 0.2s ease",
-                }}
-                {...hover(
-                  { background: T.cardHover, borderColor: T.borderHover },
-                  { background: "transparent", borderColor: T.border },
-                )}
-              >
-                {theme === "dark" ? "\u2600" : "\u263D"}
-              </button>
-            </div>
-          </div>
+          <ChatHeader
+            theme={theme}
+            model={model}
+            setModel={setModel}
+            toggleTheme={toggleTheme}
+            isSidebarOpen={isSidebarOpen}
+            setIsSidebarOpen={setIsSidebarOpen}
+            showModelPicker={showModelPicker}
+            setShowModelPicker={setShowModelPicker}
+            t={T}
+          />
 
           {/* Messages */}
           <div
@@ -1766,101 +628,13 @@ export default function Home() {
               padding: "24px 20px 0",
             }}
           >
-            {/* Empty state */}
-            {messages.length === 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minHeight: "260px",
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ position: "relative", marginBottom: "20px" }}>
-                  <div
-                    style={{
-                      width: "64px",
-                      height: "64px",
-                      borderRadius: "20px",
-                      background:
-                        "linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "28px",
-                      boxShadow: "0 0 60px rgba(139,92,246,0.25)",
-                      margin: "0 auto",
-                    }}
-                  >
-                    &#x25C8;
-                  </div>
-                </div>
-                <h2
-                  style={{
-                    fontSize: "20px",
-                    fontWeight: 800,
-                    color: T.text,
-                    marginBottom: "8px",
-                    letterSpacing: "-0.02em",
-                  }}
-                >
-                  What can I help with?
-                </h2>
-                <p
-                  style={{
-                    fontSize: "13px",
-                    color: T.textMuted,
-                    maxWidth: "260px",
-                    lineHeight: 1.7,
-                    fontFamily: "'DM Mono', monospace",
-                  }}
-                >
-                  Manage tasks through natural conversation.
-                </p>
-              </div>
-            )}
+            <EmptyState
+              t={T}
+              started={started}
+              messagesEmpty={messages.length === 0}
+              onSuggestionClick={handleSuggestionClick}
+            />
 
-            {/* Suggestions */}
-            {!started && messages.length === 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "6px",
-                  justifyContent: "center",
-                  marginBottom: "32px",
-                }}
-              >
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    className="suggestion-btn"
-                    onClick={() => {
-                      setInput(s);
-                      setStarted(true);
-                      inputRef.current?.focus();
-                    }}
-                    style={{
-                      background: T.suggestionBg,
-                      border: `1px solid ${T.suggestionBorder}`,
-                      borderRadius: "20px",
-                      padding: "7px 14px",
-                      fontSize: "12px",
-                      color: T.textMuted,
-                      cursor: "pointer",
-                      fontFamily: "'DM Mono', monospace",
-                      transition: "all 0.15s",
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Messages (AI SDK UIMessage format with parts) */}
             {messages.map((msg: UIMessage) => {
               const isUser = msg.role === "user";
               return (
@@ -1894,12 +668,9 @@ export default function Home() {
                     </div>
                   )}
                   <div style={{ maxWidth: "72%" }}>
-                    {/* Render parts */}
                     {msg.parts.map((part, idx) => {
-                      // Skip step-start markers
                       if (part.type === "step-start") return null;
 
-                      // Text part — skip empty text
                       if (part.type === "text") {
                         if (!part.text) return null;
                         return (
@@ -1917,19 +688,27 @@ export default function Home() {
                                 padding: "10px 14px",
                                 fontSize: "14px",
                                 lineHeight: 1.65,
-                                whiteSpace: "pre-wrap",
                                 boxShadow: isUser
                                   ? "0 4px 20px rgba(139,92,246,0.2)"
                                   : "none",
                               }}
                             >
-                              {part.text}
+                              {isUser ? (
+                                <span style={{ whiteSpace: "pre-wrap" }}>
+                                  {part.text}
+                                </span>
+                              ) : (
+                                <div className="markdown-body">
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    {part.text}
+                                  </ReactMarkdown>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
                       }
 
-                      // File/image part
                       if (part.type === "file") {
                         const filePart = part as {
                           type: "file";
@@ -1964,7 +743,6 @@ export default function Home() {
                         }
                       }
 
-                      // Tool invocation — render as structured task card
                       if (
                         part.type?.startsWith("tool-") ||
                         part.type === "dynamic-tool"
@@ -1978,11 +756,9 @@ export default function Home() {
                         );
                       }
 
-                      // Skip step-start and other internal part types
                       return null;
                     })}
 
-                    {/* Timestamp */}
                     <div
                       style={{
                         fontSize: "10px",
@@ -1993,7 +769,9 @@ export default function Home() {
                         paddingInline: "4px",
                       }}
                     >
-                      {formatTime(new Date())}
+                      {formatTime(
+                        messageTimestamps.current.get(msg.id) ?? new Date()
+                      )}
                     </div>
                   </div>
                   {isUser && (
@@ -2020,7 +798,7 @@ export default function Home() {
               );
             })}
 
-            {/* Loading */}
+            {/* Loading indicator */}
             {isLoading && (
               <div
                 className="msg-enter"
@@ -2076,7 +854,7 @@ export default function Home() {
             <div ref={bottomRef} style={{ height: "20px" }} />
           </div>
 
-          {/* Input */}
+          {/* Input area */}
           <div
             style={{
               padding: "14px 20px 22px",
@@ -2085,7 +863,6 @@ export default function Home() {
               background: T.headerBg,
             }}
           >
-            {/* Pending image previews */}
             {pendingImages.length > 0 && (
               <div
                 style={{
@@ -2143,7 +920,6 @@ export default function Home() {
                 alignItems: "center",
               }}
             >
-              {/* Hidden file input */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -2153,7 +929,6 @@ export default function Home() {
                 style={{ display: "none" }}
               />
 
-              {/* Image upload button */}
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -2187,6 +962,15 @@ export default function Home() {
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    (e.metaKey || e.ctrlKey) &&
+                    e.key === "Enter"
+                  ) {
+                    e.preventDefault();
+                    onSubmit(e as unknown as React.FormEvent);
+                  }
+                }}
                 disabled={isLoading}
                 placeholder={
                   pendingImages.length > 0
@@ -2205,48 +989,73 @@ export default function Home() {
                   transition: "all 0.2s ease",
                 }}
               />
-              <button
-                type="submit"
-                className="send-btn"
-                disabled={
-                  (!input.trim() && pendingImages.length === 0) ||
-                  isLoading
-                }
-                style={{
-                  width: "44px",
-                  height: "44px",
-                  borderRadius: "12px",
-                  border: "none",
-                  flexShrink: 0,
-                  background:
-                    (input.trim() || pendingImages.length > 0) &&
-                    !isLoading
-                      ? "linear-gradient(135deg, #8b5cf6, #7c3aed)"
-                      : T.inputBg,
-                  color:
-                    (input.trim() || pendingImages.length > 0) &&
-                    !isLoading
-                      ? "#fff"
-                      : T.textFaint,
-                  fontSize: "18px",
-                  cursor:
-                    (input.trim() || pendingImages.length > 0) &&
-                    !isLoading
-                      ? "pointer"
-                      : "not-allowed",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  transition: "all 0.2s ease",
-                  boxShadow:
-                    (input.trim() || pendingImages.length > 0) &&
-                    !isLoading
-                      ? "0 4px 16px rgba(139,92,246,0.3)"
-                      : "none",
-                }}
-              >
-                &#x2191;
-              </button>
+              {isLoading ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    stop();
+                    fetchTasks();
+                  }}
+                  title="Stop generating"
+                  className="send-btn"
+                  style={{
+                    width: "44px",
+                    height: "44px",
+                    borderRadius: "12px",
+                    border: "none",
+                    flexShrink: 0,
+                    background: "linear-gradient(135deg, #f87171, #ef4444)",
+                    color: "#fff",
+                    fontSize: "14px",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "all 0.2s ease",
+                    boxShadow: "0 4px 16px rgba(248,113,113,0.3)",
+                  }}
+                >
+                  &#x25A0;
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="send-btn"
+                  disabled={
+                    !input.trim() && pendingImages.length === 0
+                  }
+                  style={{
+                    width: "44px",
+                    height: "44px",
+                    borderRadius: "12px",
+                    border: "none",
+                    flexShrink: 0,
+                    background:
+                      input.trim() || pendingImages.length > 0
+                        ? "linear-gradient(135deg, #8b5cf6, #7c3aed)"
+                        : T.inputBg,
+                    color:
+                      input.trim() || pendingImages.length > 0
+                        ? "#fff"
+                        : T.textFaint,
+                    fontSize: "18px",
+                    cursor:
+                      input.trim() || pendingImages.length > 0
+                        ? "pointer"
+                        : "not-allowed",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "all 0.2s ease",
+                    boxShadow:
+                      input.trim() || pendingImages.length > 0
+                        ? "0 4px 16px rgba(139,92,246,0.3)"
+                        : "none",
+                  }}
+                >
+                  &#x2191;
+                </button>
+              )}
             </form>
             <div
               style={{
@@ -2257,9 +1066,10 @@ export default function Home() {
                 color: T.textFaint,
               }}
             >
-              Enter to send &middot; &#x1F4CE; attach image &middot;
-              &#x270E; edit &middot; &#x2713; complete &middot; &#x25B6;
-              start &middot; &#x00D7; delete
+              {"\u2318"}K to focus &middot; Enter to send &middot;
+              &#x25A0; stop &middot; &#x1F4CE; attach &middot; &#x270E;
+              edit &middot; &#x2713; complete &middot; &#x25B6; start
+              &middot; &#x00D7; delete
             </div>
           </div>
         </div>
