@@ -1,4 +1,3 @@
-import { createClient, type Client } from "@libsql/client";
 import { randomUUID } from "crypto";
 
 // Task type
@@ -21,62 +20,160 @@ export type Task = {
   updatedAt: string;
 };
 
-// Database client — Turso (remote) or local SQLite file
+// ─── Storage backend abstraction ────────────────────────────────────
 
-let _client: Client | null = null;
+interface Store {
+  getAll(): Promise<Task[]>;
+  get(id: string): Promise<Task | null>;
+  set(task: Task): Promise<void>;
+  remove(id: string): Promise<void>;
+}
 
-function getClient(): Client {
-  if (_client) return _client;
+// ─── In-memory store (Vercel serverless fallback) ───────────────────
+
+class MemoryStore implements Store {
+  private map = new Map<string, Task>();
+  async getAll() {
+    return Array.from(this.map.values()).sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+  async get(id: string) {
+    return this.map.get(id) ?? null;
+  }
+  async set(task: Task) {
+    this.map.set(task.id, task);
+  }
+  async remove(id: string) {
+    this.map.delete(id);
+  }
+}
+
+// ─── LibSQL store (Turso remote or local SQLite file) ───────────────
+
+class LibSQLStore implements Store {
+  private client: import("@libsql/client").Client;
+  private ready = false;
+
+  constructor(url: string, authToken?: string) {
+    // Dynamic import to avoid loading native bindings when not needed
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createClient } = require("@libsql/client") as typeof import("@libsql/client");
+    this.client = createClient({ url, authToken });
+  }
+
+  private async ensureTable() {
+    if (this.ready) return;
+    await this.client.execute(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        description TEXT,
+        priority    TEXT NOT NULL DEFAULT 'medium',
+        status      TEXT NOT NULL DEFAULT 'todo',
+        due_date    TEXT,
+        attachments TEXT NOT NULL DEFAULT '[]',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      )
+    `);
+    try {
+      await this.client.execute(
+        "ALTER TABLE tasks ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"
+      );
+    } catch {
+      // Column already exists
+    }
+    this.ready = true;
+  }
+
+  private rowToTask(row: Record<string, unknown>): Task {
+    return {
+      id: row.id as string,
+      title: row.title as string,
+      description: (row.description as string) ?? null,
+      priority: (row.priority as Task["priority"]) ?? "medium",
+      status: (row.status as Task["status"]) ?? "todo",
+      dueDate: (row.due_date as string) ?? null,
+      attachments: parseAttachments(row.attachments),
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    };
+  }
+
+  async getAll() {
+    await this.ensureTable();
+    const result = await this.client.execute(
+      "SELECT * FROM tasks ORDER BY created_at DESC"
+    );
+    return result.rows.map((r) =>
+      this.rowToTask(r as unknown as Record<string, unknown>)
+    );
+  }
+
+  async get(id: string) {
+    await this.ensureTable();
+    const result = await this.client.execute({
+      sql: "SELECT * FROM tasks WHERE id = ? LIMIT 1",
+      args: [id],
+    });
+    return result.rows.length > 0
+      ? this.rowToTask(result.rows[0] as unknown as Record<string, unknown>)
+      : null;
+  }
+
+  async set(task: Task) {
+    await this.ensureTable();
+    await this.client.execute({
+      sql: `INSERT OR REPLACE INTO tasks
+            (id, title, description, priority, status, due_date, attachments, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        task.id,
+        task.title,
+        task.description,
+        task.priority,
+        task.status,
+        task.dueDate,
+        JSON.stringify(task.attachments),
+        task.createdAt,
+        task.updatedAt,
+      ],
+    });
+  }
+
+  async remove(id: string) {
+    await this.ensureTable();
+    await this.client.execute({ sql: "DELETE FROM tasks WHERE id = ?", args: [id] });
+  }
+}
+
+// ─── Store initialization ───────────────────────────────────────────
+
+let _store: Store | null = null;
+
+function getStore(): Store {
+  if (_store) return _store;
 
   if (process.env.TURSO_DATABASE_URL) {
-    // Production: connect to Turso
-    _client = createClient({
-      url: process.env.TURSO_DATABASE_URL,
-      authToken: process.env.TURSO_AUTH_TOKEN,
-    });
-  } else {
-    // Local SQLite file — use /tmp on Vercel (read-only filesystem), local file otherwise
-    const dbPath = process.env.VERCEL
-      ? "file:/tmp/taskflow.db"
-      : "file:./taskflow.db";
-    _client = createClient({ url: dbPath });
-  }
-
-  return _client;
-}
-
-// Auto-create tasks table on first use
-
-let _initialized = false;
-
-async function ensureTable(): Promise<void> {
-  if (_initialized) return;
-  const db = getClient();
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id          TEXT PRIMARY KEY,
-      title       TEXT NOT NULL,
-      description TEXT,
-      priority    TEXT NOT NULL DEFAULT 'medium',
-      status      TEXT NOT NULL DEFAULT 'todo',
-      due_date    TEXT,
-      attachments TEXT NOT NULL DEFAULT '[]',
-      created_at  TEXT NOT NULL,
-      updated_at  TEXT NOT NULL
-    )
-  `);
-  // Migrate: add attachments column if table existed before this feature
-  try {
-    await db.execute(
-      "ALTER TABLE tasks ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"
+    // Remote Turso database — works everywhere
+    _store = new LibSQLStore(
+      process.env.TURSO_DATABASE_URL,
+      process.env.TURSO_AUTH_TOKEN
     );
-  } catch {
-    // Column already exists — ignore
+  } else if (!process.env.VERCEL) {
+    // Local development — SQLite file for persistence across restarts
+    _store = new LibSQLStore("file:./taskflow.db");
+  } else {
+    // Vercel without Turso — in-memory (works within warm function instances)
+    _store = new MemoryStore();
   }
-  _initialized = true;
+
+  return _store;
 }
 
-// Helpers
+// ─── Helpers ────────────────────────────────────────────────────────
 
 const now = () => new Date().toISOString();
 
@@ -88,20 +185,6 @@ function parseAttachments(raw: unknown): TaskAttachment[] {
   } catch {
     return [];
   }
-}
-
-function rowToTask(row: Record<string, unknown>): Task {
-  return {
-    id: row.id as string,
-    title: row.title as string,
-    description: (row.description as string) ?? null,
-    priority: (row.priority as Task["priority"]) ?? "medium",
-    status: (row.status as Task["status"]) ?? "todo",
-    dueDate: (row.due_date as string) ?? null,
-    attachments: parseAttachments(row.attachments),
-    createdAt: row.created_at as string,
-    updatedAt: row.updated_at as string,
-  };
 }
 
 // Natural language date parsing
@@ -121,13 +204,8 @@ export function parseDate(s: string): string {
     return d.toISOString().split("T")[0];
   }
   const days = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
+    "sunday", "monday", "tuesday", "wednesday",
+    "thursday", "friday", "saturday",
   ];
   const idx = days.indexOf(lower);
   if (idx !== -1) {
@@ -141,7 +219,7 @@ export function parseDate(s: string): string {
   return isNaN(parsed.getTime()) ? s : parsed.toISOString().split("T")[0];
 }
 
-// CRUD
+// ─── CRUD ───────────────────────────────────────────────────────────
 
 export async function createTask(input: {
   title: string;
@@ -150,9 +228,7 @@ export async function createTask(input: {
   dueDate?: string;
   attachments?: TaskAttachment[];
 }): Promise<Task> {
-  await ensureTable();
-  const db = getClient();
-  const attachments = input.attachments ?? [];
+  const store = getStore();
   const task: Task = {
     id: randomUUID(),
     title: input.title,
@@ -160,185 +236,83 @@ export async function createTask(input: {
     priority: input.priority ?? "medium",
     status: "todo",
     dueDate: input.dueDate ?? null,
-    attachments,
+    attachments: input.attachments ?? [],
     createdAt: now(),
     updatedAt: now(),
   };
-  await db.execute({
-    sql: `INSERT INTO tasks (id, title, description, priority, status, due_date, attachments, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [
-      task.id,
-      task.title,
-      task.description,
-      task.priority,
-      task.status,
-      task.dueDate,
-      JSON.stringify(attachments),
-      task.createdAt,
-      task.updatedAt,
-    ],
-  });
+  await store.set(task);
   return task;
 }
 
 export async function getAllTasks(): Promise<Task[]> {
-  await ensureTable();
-  const db = getClient();
-  const result = await db.execute(
-    "SELECT * FROM tasks ORDER BY created_at DESC"
-  );
-  return result.rows.map((row) =>
-    rowToTask(row as unknown as Record<string, unknown>)
-  );
+  return getStore().getAll();
 }
 
 export async function findTaskByTitle(title: string): Promise<Task | null> {
-  await ensureTable();
-  const db = getClient();
-  let result = await db.execute({
-    sql: "SELECT * FROM tasks WHERE title = ? LIMIT 1",
-    args: [title],
-  });
-  if (result.rows.length > 0)
-    return rowToTask(result.rows[0] as unknown as Record<string, unknown>);
-  result = await db.execute({
-    sql: "SELECT * FROM tasks WHERE LOWER(title) LIKE ? LIMIT 1",
-    args: [`%${title.toLowerCase()}%`],
-  });
-  return result.rows.length > 0
-    ? rowToTask(result.rows[0] as unknown as Record<string, unknown>)
-    : null;
+  const all = await getAllTasks();
+  const exact = all.find((t) => t.title === title);
+  if (exact) return exact;
+  const partial = all.find((t) =>
+    t.title.toLowerCase().includes(title.toLowerCase())
+  );
+  return partial ?? null;
 }
 
 export async function getTaskById(id: string): Promise<Task | null> {
-  await ensureTable();
-  const db = getClient();
-  const result = await db.execute({
-    sql: "SELECT * FROM tasks WHERE id = ? LIMIT 1",
-    args: [id],
-  });
-  return result.rows.length > 0
-    ? rowToTask(result.rows[0] as unknown as Record<string, unknown>)
-    : null;
+  return getStore().get(id);
 }
 
 export async function updateTask(
   id: string,
   updates: Partial<Omit<Task, "id" | "createdAt">>
 ): Promise<Task | null> {
-  await ensureTable();
-  const db = getClient();
-
-  const sets: string[] = [];
-  const args: (string | null)[] = [];
-
-  if (updates.title !== undefined) {
-    sets.push("title = ?");
-    args.push(updates.title);
-  }
-  if (updates.description !== undefined) {
-    sets.push("description = ?");
-    args.push(updates.description);
-  }
-  if (updates.priority !== undefined) {
-    sets.push("priority = ?");
-    args.push(updates.priority);
-  }
-  if (updates.status !== undefined) {
-    sets.push("status = ?");
-    args.push(updates.status);
-  }
-  if (updates.dueDate !== undefined) {
-    sets.push("due_date = ?");
-    args.push(updates.dueDate);
-  }
-  if (updates.attachments !== undefined) {
-    sets.push("attachments = ?");
-    args.push(JSON.stringify(updates.attachments));
-  }
-
-  if (sets.length === 0) return getTaskById(id);
-
-  sets.push("updated_at = ?");
-  args.push(now());
-  args.push(id);
-
-  await db.execute({
-    sql: `UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`,
-    args,
-  });
-
-  return getTaskById(id);
+  const store = getStore();
+  const existing = await store.get(id);
+  if (!existing) return null;
+  const updated: Task = { ...existing, ...updates, updatedAt: now() };
+  await store.set(updated);
+  return updated;
 }
 
 export async function deleteTask(id: string): Promise<void> {
-  await ensureTable();
-  const db = getClient();
-  await db.execute({
-    sql: "DELETE FROM tasks WHERE id = ?",
-    args: [id],
-  });
+  await getStore().remove(id);
 }
 
 export async function getOverdueTasks(): Promise<Task[]> {
-  await ensureTable();
-  const db = getClient();
   const today = new Date().toISOString().split("T")[0];
-  const result = await db.execute({
-    sql: `SELECT * FROM tasks
-          WHERE due_date IS NOT NULL
-            AND due_date < ?
-            AND status IN ('todo', 'in_progress')
-          ORDER BY due_date ASC`,
-    args: [today],
-  });
-  return result.rows.map((row) =>
-    rowToTask(row as unknown as Record<string, unknown>)
-  );
+  const all = await getAllTasks();
+  return all
+    .filter(
+      (t) =>
+        t.dueDate && t.dueDate < today &&
+        (t.status === "todo" || t.status === "in_progress")
+    )
+    .sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? ""));
 }
 
 export async function getTasksByStatus(
   status: Task["status"]
 ): Promise<Task[]> {
-  await ensureTable();
-  const db = getClient();
-  const result = await db.execute({
-    sql: "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
-    args: [status],
-  });
-  return result.rows.map((row) =>
-    rowToTask(row as unknown as Record<string, unknown>)
-  );
+  const all = await getAllTasks();
+  return all.filter((t) => t.status === status);
 }
 
 export async function getTasksByPriority(
   priority: Task["priority"]
 ): Promise<Task[]> {
-  await ensureTable();
-  const db = getClient();
-  const result = await db.execute({
-    sql: "SELECT * FROM tasks WHERE priority = ? ORDER BY created_at DESC",
-    args: [priority],
-  });
-  return result.rows.map((row) =>
-    rowToTask(row as unknown as Record<string, unknown>)
-  );
+  const all = await getAllTasks();
+  return all.filter((t) => t.priority === priority);
 }
 
 export async function getTopPriorityTasks(limit = 3): Promise<Task[]> {
-  await ensureTable();
-  const db = getClient();
-  const result = await db.execute({
-    sql: `SELECT * FROM tasks
-          WHERE status IN ('todo', 'in_progress')
-          ORDER BY
-            CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-            due_date ASC NULLS LAST
-          LIMIT ?`,
-    args: [limit],
-  });
-  return result.rows.map((row) =>
-    rowToTask(row as unknown as Record<string, unknown>)
-  );
+  const all = await getAllTasks();
+  return all
+    .filter((t) => t.status === "todo" || t.status === "in_progress")
+    .sort((a, b) => {
+      const pOrder = { high: 0, medium: 1, low: 2 };
+      const pDiff = pOrder[a.priority] - pOrder[b.priority];
+      if (pDiff !== 0) return pDiff;
+      return (a.dueDate ?? "z").localeCompare(b.dueDate ?? "z");
+    })
+    .slice(0, limit);
 }
