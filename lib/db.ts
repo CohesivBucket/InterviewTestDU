@@ -3,6 +3,12 @@ import { randomUUID } from "crypto";
 
 // Task type
 
+export type TaskAttachment = {
+  name: string;
+  type: string;
+  dataUrl: string;
+};
+
 export type Task = {
   id: string;
   title: string;
@@ -10,6 +16,7 @@ export type Task = {
   priority: "low" | "medium" | "high";
   status: "todo" | "in_progress" | "done";
   dueDate: string | null;
+  attachments: TaskAttachment[];
   createdAt: string;
   updatedAt: string;
 };
@@ -50,16 +57,35 @@ async function ensureTable(): Promise<void> {
       priority    TEXT NOT NULL DEFAULT 'medium',
       status      TEXT NOT NULL DEFAULT 'todo',
       due_date    TEXT,
+      attachments TEXT NOT NULL DEFAULT '[]',
       created_at  TEXT NOT NULL,
       updated_at  TEXT NOT NULL
     )
   `);
+  // Migrate: add attachments column if table existed before this feature
+  try {
+    await db.execute(
+      "ALTER TABLE tasks ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"
+    );
+  } catch {
+    // Column already exists — ignore
+  }
   _initialized = true;
 }
 
 // Helpers
 
 const now = () => new Date().toISOString();
+
+function parseAttachments(raw: unknown): TaskAttachment[] {
+  if (!raw || raw === "[]") return [];
+  try {
+    const parsed = JSON.parse(raw as string);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 function rowToTask(row: Record<string, unknown>): Task {
   return {
@@ -69,6 +95,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     priority: (row.priority as Task["priority"]) ?? "medium",
     status: (row.status as Task["status"]) ?? "todo",
     dueDate: (row.due_date as string) ?? null,
+    attachments: parseAttachments(row.attachments),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -118,9 +145,11 @@ export async function createTask(input: {
   description?: string;
   priority?: "low" | "medium" | "high";
   dueDate?: string;
+  attachments?: TaskAttachment[];
 }): Promise<Task> {
   await ensureTable();
   const db = getClient();
+  const attachments = input.attachments ?? [];
   const task: Task = {
     id: randomUUID(),
     title: input.title,
@@ -128,12 +157,13 @@ export async function createTask(input: {
     priority: input.priority ?? "medium",
     status: "todo",
     dueDate: input.dueDate ?? null,
+    attachments,
     createdAt: now(),
     updatedAt: now(),
   };
   await db.execute({
-    sql: `INSERT INTO tasks (id, title, description, priority, status, due_date, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO tasks (id, title, description, priority, status, due_date, attachments, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       task.id,
       task.title,
@@ -141,6 +171,7 @@ export async function createTask(input: {
       task.priority,
       task.status,
       task.dueDate,
+      JSON.stringify(attachments),
       task.createdAt,
       task.updatedAt,
     ],
@@ -154,20 +185,20 @@ export async function getAllTasks(): Promise<Task[]> {
   const result = await db.execute(
     "SELECT * FROM tasks ORDER BY created_at DESC"
   );
-  return result.rows.map((row) => rowToTask(row as unknown as Record<string, unknown>));
+  return result.rows.map((row) =>
+    rowToTask(row as unknown as Record<string, unknown>)
+  );
 }
 
 export async function findTaskByTitle(title: string): Promise<Task | null> {
   await ensureTable();
   const db = getClient();
-  // Try exact match first
   let result = await db.execute({
     sql: "SELECT * FROM tasks WHERE title = ? LIMIT 1",
     args: [title],
   });
   if (result.rows.length > 0)
     return rowToTask(result.rows[0] as unknown as Record<string, unknown>);
-  // Try partial match (case-insensitive)
   result = await db.execute({
     sql: "SELECT * FROM tasks WHERE LOWER(title) LIKE ? LIMIT 1",
     args: [`%${title.toLowerCase()}%`],
@@ -196,7 +227,6 @@ export async function updateTask(
   await ensureTable();
   const db = getClient();
 
-  // Build dynamic SET clause
   const sets: string[] = [];
   const args: (string | null)[] = [];
 
@@ -219,6 +249,10 @@ export async function updateTask(
   if (updates.dueDate !== undefined) {
     sets.push("due_date = ?");
     args.push(updates.dueDate);
+  }
+  if (updates.attachments !== undefined) {
+    sets.push("attachments = ?");
+    args.push(JSON.stringify(updates.attachments));
   }
 
   if (sets.length === 0) return getTaskById(id);
@@ -256,7 +290,9 @@ export async function getOverdueTasks(): Promise<Task[]> {
           ORDER BY due_date ASC`,
     args: [today],
   });
-  return result.rows.map((row) => rowToTask(row as unknown as Record<string, unknown>));
+  return result.rows.map((row) =>
+    rowToTask(row as unknown as Record<string, unknown>)
+  );
 }
 
 export async function getTasksByStatus(
@@ -268,7 +304,9 @@ export async function getTasksByStatus(
     sql: "SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC",
     args: [status],
   });
-  return result.rows.map((row) => rowToTask(row as unknown as Record<string, unknown>));
+  return result.rows.map((row) =>
+    rowToTask(row as unknown as Record<string, unknown>)
+  );
 }
 
 export async function getTasksByPriority(
@@ -280,7 +318,9 @@ export async function getTasksByPriority(
     sql: "SELECT * FROM tasks WHERE priority = ? ORDER BY created_at DESC",
     args: [priority],
   });
-  return result.rows.map((row) => rowToTask(row as unknown as Record<string, unknown>));
+  return result.rows.map((row) =>
+    rowToTask(row as unknown as Record<string, unknown>)
+  );
 }
 
 export async function getTopPriorityTasks(limit = 3): Promise<Task[]> {
@@ -295,5 +335,7 @@ export async function getTopPriorityTasks(limit = 3): Promise<Task[]> {
           LIMIT ?`,
     args: [limit],
   });
-  return result.rows.map((row) => rowToTask(row as unknown as Record<string, unknown>));
+  return result.rows.map((row) =>
+    rowToTask(row as unknown as Record<string, unknown>)
+  );
 }

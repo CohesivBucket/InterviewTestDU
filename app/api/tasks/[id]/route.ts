@@ -1,5 +1,8 @@
 import { updateTask, deleteTask } from "@/lib/db";
 
+// Allow large payloads for file attachments
+export const maxDuration = 30;
+
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json();

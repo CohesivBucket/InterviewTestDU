@@ -10,6 +10,7 @@ import type { Task, Filter, Theme, Status } from "@/lib/types";
 import { DARK, LIGHT, formatTime, isOverdue, hover } from "@/lib/theme";
 import { ToolCard } from "@/components/ToolCard";
 import { TaskCard } from "@/components/TaskCard";
+import { TaskDetailModal } from "@/components/TaskDetailModal";
 import { ChatHeader } from "@/components/ChatHeader";
 import { EmptyState } from "@/components/EmptyState";
 
@@ -45,6 +46,7 @@ export default function Home() {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -231,6 +233,15 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),
     });
+  };
+
+  // New chat / reset
+  const handleNewChat = () => {
+    setMessages([]);
+    setStarted(false);
+    setInput("");
+    setPendingFiles([]);
+    messageTimestamps.current.clear();
   };
 
   // Send handler
@@ -661,6 +672,7 @@ export default function Home() {
                   onStatusChange={handleStatusChange}
                   onDelete={handleDelete}
                   onEdit={handleEdit}
+                  onOpenDetail={setDetailTask}
                   t={T}
                 />
               ))
@@ -688,6 +700,7 @@ export default function Home() {
             setIsSidebarOpen={setIsSidebarOpen}
             showModelPicker={showModelPicker}
             setShowModelPicker={setShowModelPicker}
+            onNewChat={handleNewChat}
             t={T}
           />
 
@@ -1299,6 +1312,22 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* Task detail modal */}
+      {detailTask && (
+        <TaskDetailModal
+          task={detailTask}
+          onClose={() => setDetailTask(null)}
+          onEdit={(id, updates) => {
+            handleEdit(id, updates);
+            // Update the detail modal's task in real-time
+            setDetailTask((prev) =>
+              prev && prev.id === id ? { ...prev, ...updates } : prev
+            );
+          }}
+          t={T}
+        />
+      )}
     </>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import type { Task, Priority, Status } from "@/lib/types";
+import { useState, useRef } from "react";
+import type { Task, TaskAttachment, Priority, Status } from "@/lib/types";
 import {
   DARK,
   LIGHT,
@@ -13,17 +13,31 @@ import {
   isOverdue,
 } from "@/lib/theme";
 
+const ACCEPTED_TYPES =
+  "image/*,application/pdf,.txt,.csv,.md,.json,.xml,.html";
+
+function getFileIcon(type: string) {
+  if (type === "application/pdf") return "PDF";
+  if (type.startsWith("text/")) return "TXT";
+  if (type === "application/json") return "JSON";
+  if (type.includes("csv")) return "CSV";
+  if (type.includes("xml") || type.includes("html")) return "XML";
+  return "FILE";
+}
+
 export function TaskCard({
   task,
   onStatusChange,
   onDelete,
   onEdit,
+  onOpenDetail,
   t: theme,
 }: {
   task: Task;
   onStatusChange: (id: string, status: Status) => void;
   onDelete: (id: string) => void;
   onEdit: (id: string, updates: Partial<Task>) => void;
+  onOpenDetail: (task: Task) => void;
   t: typeof DARK;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -33,8 +47,10 @@ export function TaskCard({
   const [editPriority, setEditPriority] = useState<Priority>(task.priority);
   const [editStatus, setEditStatus] = useState<Status>(task.status);
   const [editDueDate, setEditDueDate] = useState(task.dueDate ?? "");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const overdue = isOverdue(task);
   const done = task.status === "done";
+  const attachments = task.attachments ?? [];
 
   const startEditing = () => {
     setEditTitle(task.title);
@@ -57,6 +73,33 @@ export function TaskCard({
   };
 
   const cancelEdit = () => setEditing(false);
+
+  const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files);
+    const newAttachments: TaskAttachment[] = [];
+    let loaded = 0;
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          newAttachments.push({
+            name: file.name,
+            type: file.type,
+            dataUrl: reader.result as string,
+          });
+        }
+        loaded++;
+        if (loaded === files.length) {
+          onEdit(task.id, {
+            attachments: [...attachments, ...newAttachments],
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
 
   // Edit mode
   if (editing) {
@@ -214,6 +257,46 @@ export function TaskCard({
           />
         </div>
 
+        {/* Attach files */}
+        <div style={{ marginBottom: "8px" }}>
+          <div
+            style={{
+              fontSize: "9px",
+              fontFamily: "monospace",
+              color: theme.textMuted,
+              marginBottom: "4px",
+              letterSpacing: "0.1em",
+            }}
+          >
+            ATTACHMENTS
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            onChange={handleAddFiles}
+            style={{ display: "none" }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              width: "100%",
+              padding: "5px 0",
+              borderRadius: "6px",
+              border: `1.5px dashed ${theme.border}`,
+              background: "transparent",
+              color: theme.textMuted,
+              fontSize: "10px",
+              fontFamily: "'DM Mono', monospace",
+              cursor: "pointer",
+              transition: "all 0.12s",
+            }}
+          >
+            + Add Files ({attachments.length} attached)
+          </button>
+        </div>
+
         {/* Save / Cancel */}
         <div style={{ display: "flex", gap: "6px" }}>
           <button
@@ -260,7 +343,7 @@ export function TaskCard({
   // Normal view
   return (
     <div
-      onClick={() => setExpanded(!expanded)}
+      onClick={() => onOpenDetail(task)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -354,6 +437,21 @@ export function TaskCard({
                 ACTIVE
               </span>
             )}
+            {attachments.length > 0 && (
+              <span
+                style={{
+                  fontSize: "9px",
+                  background: theme.accentSoft,
+                  color: theme.accent,
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  fontWeight: 600,
+                  fontFamily: "'DM Mono', monospace",
+                }}
+              >
+                {attachments.length} file{attachments.length !== 1 ? "s" : ""}
+              </span>
+            )}
           </div>
           <div
             style={{
@@ -379,6 +477,66 @@ export function TaskCard({
               }}
             >
               {formatDate(task.dueDate)}
+            </div>
+          )}
+
+          {/* Attachment thumbnails — show up to 3 small previews */}
+          {attachments.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                gap: "4px",
+                marginTop: "8px",
+                alignItems: "center",
+              }}
+            >
+              {attachments.slice(0, 3).map((att, idx) =>
+                att.type.startsWith("image/") ? (
+                  <img
+                    key={idx}
+                    src={att.dataUrl}
+                    alt={att.name}
+                    style={{
+                      width: "32px",
+                      height: "32px",
+                      borderRadius: "5px",
+                      objectFit: "cover",
+                      border: `1px solid ${theme.border}`,
+                    }}
+                  />
+                ) : (
+                  <div
+                    key={idx}
+                    style={{
+                      width: "32px",
+                      height: "32px",
+                      borderRadius: "5px",
+                      border: `1px solid ${theme.border}`,
+                      background: theme.inputBg,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "7px",
+                      fontFamily: "monospace",
+                      fontWeight: 700,
+                      color: theme.accent,
+                    }}
+                  >
+                    {getFileIcon(att.type)}
+                  </div>
+                )
+              )}
+              {attachments.length > 3 && (
+                <span
+                  style={{
+                    fontSize: "9px",
+                    fontFamily: "'DM Mono', monospace",
+                    color: theme.textFaint,
+                  }}
+                >
+                  +{attachments.length - 3}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -473,7 +631,7 @@ export function TaskCard({
             }}
             {...hover(
               { background: "rgba(248,113,113,0.12)", color: "#f87171" },
-              { background: "transparent", color: theme.textMuted },
+              { background: "transparent", color: theme.textMuted }
             )}
           >
             &#x00D7;

@@ -3,12 +3,19 @@ export type Status = "todo" | "in_progress" | "done";
 export type Filter = "all" | "todo" | "in_progress" | "done" | "overdue";
 export type Theme = "dark" | "light";
 
+export interface TaskAttachment {
+  name: string;
+  type: string;
+  dataUrl: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   priority: Priority;
   status: Status;
   dueDate?: string | null;
+  attachments: TaskAttachment[];
   createdAt: string;
   updatedAt: string;
 }

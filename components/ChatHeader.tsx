@@ -13,6 +13,7 @@ export function ChatHeader({
   setIsSidebarOpen,
   showModelPicker,
   setShowModelPicker,
+  onNewChat,
   t,
 }: {
   theme: Theme;
@@ -23,6 +24,7 @@ export function ChatHeader({
   setIsSidebarOpen: (v: boolean) => void;
   showModelPicker: boolean;
   setShowModelPicker: (v: boolean) => void;
+  onNewChat: () => void;
   t: typeof DARK;
 }) {
   return (
@@ -93,6 +95,34 @@ export function ChatHeader({
           gap: "8px",
         }}
       >
+        {/* New Chat button */}
+        <button
+          onClick={onNewChat}
+          title="New Chat"
+          style={{
+            fontSize: "11px",
+            fontFamily: "'Syne', sans-serif",
+            fontWeight: 600,
+            color: t.accent,
+            background: t.accentSoft,
+            border: `1px solid rgba(139,92,246,0.3)`,
+            borderRadius: "8px",
+            padding: "6px 12px",
+            cursor: "pointer",
+            transition: "all 0.15s",
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            whiteSpace: "nowrap",
+          }}
+          {...hover(
+            { background: "rgba(139,92,246,0.2)" },
+            { background: t.accentSoft },
+          )}
+        >
+          + New Chat
+        </button>
+
         {/* Model selector */}
         <div style={{ position: "relative" }}>
           <button
