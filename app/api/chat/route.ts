@@ -67,7 +67,7 @@ ${taskSummary}
 
 ## Capabilities
 You have tools to CREATE, READ, UPDATE, and DELETE tasks in a real database.
-You can also GENERATE IMAGES using AI (powered by Google Gemini) — use the generate_image tool when users want to create, draw, design, or visualize anything.
+You can also GENERATE IMAGES using AI (powered by OpenAI DALL-E) — use the generate_image tool when users want to create, draw, design, or visualize anything.
 Always use your tools — never pretend to create or delete tasks without calling the function.
 
 ## Image Attachments

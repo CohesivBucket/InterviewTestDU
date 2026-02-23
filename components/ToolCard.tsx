@@ -684,7 +684,7 @@ function ImageGenCard({
               marginLeft: "auto",
             }}
           >
-            Gemini AI
+            DALL-E
           </span>
         </div>
         {imageUrl && (
