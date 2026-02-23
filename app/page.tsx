@@ -13,6 +13,14 @@ import { TaskCard } from "@/components/TaskCard";
 import { ChatHeader } from "@/components/ChatHeader";
 import { EmptyState } from "@/components/EmptyState";
 
+// Types
+
+interface PendingFile {
+  name: string;
+  type: string;
+  dataUrl: string;
+}
+
 // Filter definitions
 
 const FILTER_DEFS: { key: Filter; label: string; icon: string }[] = [
@@ -23,6 +31,9 @@ const FILTER_DEFS: { key: Filter; label: string; icon: string }[] = [
   { key: "overdue", label: "Overdue", icon: "\u26A0" },
 ];
 
+// Accepted file types for upload
+const ACCEPTED_TYPES = "image/*,application/pdf,.txt,.csv,.md,.json,.xml,.html";
+
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
@@ -32,11 +43,13 @@ export default function Home() {
   const [theme, setTheme] = useState<Theme>("dark");
   const [model, setModel] = useState("gpt-5-mini");
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageTimestamps = useRef<Map<string, Date>>(new Map());
+  const dragCounter = useRef(0);
 
   const T = theme === "dark" ? DARK : LIGHT;
 
@@ -89,26 +102,66 @@ export default function Home() {
     }
   }, [messages]);
 
-  // Image attachments
+  // File attachments (images, PDFs, text files, etc.)
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    Array.from(files).forEach((file) => {
-      if (!file.type.startsWith("image/")) return;
+  const processFiles = (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    files.forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
         if (typeof reader.result === "string") {
-          setPendingImages((prev) => [...prev, reader.result as string]);
+          setPendingFiles((prev) => [
+            ...prev,
+            { name: file.name, type: file.type, dataUrl: reader.result as string },
+          ]);
         }
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) processFiles(e.target.files);
     e.target.value = "";
   };
 
-  const removePendingImage = (idx: number) => {
-    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+  const removePendingFile = (idx: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // Drag and drop
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragging(false);
+    if (e.dataTransfer.files.length > 0) {
+      processFiles(e.dataTransfer.files);
+    }
   };
 
   // Data sync
@@ -185,29 +238,36 @@ export default function Home() {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = input.trim();
-    if (!text && pendingImages.length === 0) return;
+    if (!text && pendingFiles.length === 0) return;
     if (isLoading) return;
     setStarted(true);
     setInput("");
 
     const files =
-      pendingImages.length > 0
-        ? pendingImages.map((dataUrl) => {
-            const match = dataUrl.match(/^data:(image\/[^;]+);/);
-            const mediaType = match ? match[1] : "image/png";
-            return { type: "file" as const, mediaType, url: dataUrl };
+      pendingFiles.length > 0
+        ? pendingFiles.map((f) => {
+            const mediaType = f.type || "application/octet-stream";
+            return { type: "file" as const, mediaType, url: f.dataUrl };
           })
         : undefined;
 
-    setPendingImages([]);
+    setPendingFiles([]);
 
-    await sendMessage({
-      text:
-        text ||
-        "I've attached an image. Please describe what you see and how it relates to my tasks.",
-      files,
-    });
+    const fileNames = pendingFiles.map((f) => f.name).join(", ");
+    const hasImages = pendingFiles.some((f) => f.type.startsWith("image/"));
+    const hasDocs = pendingFiles.some((f) => !f.type.startsWith("image/"));
 
+    let fallbackText = text;
+    if (!text && pendingFiles.length > 0) {
+      if (hasImages && hasDocs)
+        fallbackText = `I've attached files (${fileNames}). Please analyze them and relate to my tasks.`;
+      else if (hasImages)
+        fallbackText = `I've attached an image. Please describe what you see and how it relates to my tasks.`;
+      else
+        fallbackText = `I've attached a file (${fileNames}). Please analyze its contents and relate to my tasks.`;
+    }
+
+    await sendMessage({ text: fallbackText, files });
     await fetchTasks();
   };
 
@@ -231,6 +291,17 @@ export default function Home() {
     setInput(text);
     setStarted(true);
     inputRef.current?.focus();
+  };
+
+  // File preview helper
+
+  const getFileIcon = (type: string) => {
+    if (type === "application/pdf") return "PDF";
+    if (type.startsWith("text/")) return "TXT";
+    if (type === "application/json") return "JSON";
+    if (type.includes("csv")) return "CSV";
+    if (type.includes("xml") || type.includes("html")) return "XML";
+    return "FILE";
   };
 
   // Render
@@ -741,6 +812,45 @@ export default function Home() {
                             </div>
                           );
                         }
+                        // Non-image file attachment in chat
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              marginBottom: "6px",
+                              background: T.toolCardBg,
+                              border: `1px solid ${T.toolCardBorder}`,
+                              borderRadius: "10px",
+                              padding: "8px 12px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: "9px",
+                                fontFamily: "monospace",
+                                fontWeight: 700,
+                                color: T.accent,
+                                background: T.accentSoft,
+                                padding: "2px 6px",
+                                borderRadius: "4px",
+                              }}
+                            >
+                              {getFileIcon(filePart.mediaType)}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "12px",
+                                color: T.textMuted,
+                                fontFamily: "'DM Mono', monospace",
+                              }}
+                            >
+                              Attached file
+                            </span>
+                          </div>
+                        );
                       }
 
                       if (
@@ -854,16 +964,90 @@ export default function Home() {
             <div ref={bottomRef} style={{ height: "20px" }} />
           </div>
 
-          {/* Input area */}
+          {/* Input area with drag-and-drop */}
           <div
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
             style={{
               padding: "14px 20px 22px",
-              borderTop: `1px solid ${T.border}`,
-              backdropFilter: "blur(10px)",
-              background: T.headerBg,
+              borderTop: `1px solid ${isDragging ? T.accent : T.border}`,
+              background: isDragging
+                ? (theme === "dark"
+                    ? "rgba(139,92,246,0.08)"
+                    : "rgba(124,58,237,0.06)")
+                : T.headerBg,
+              transition: "all 0.2s ease",
+              position: "relative",
             }}
           >
-            {pendingImages.length > 0 && (
+            {/* Drag overlay */}
+            {isDragging && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background:
+                    theme === "dark"
+                      ? "rgba(8,8,16,0.85)"
+                      : "rgba(248,247,255,0.9)",
+                  borderRadius: "0",
+                  zIndex: 10,
+                  pointerEvents: "none",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "48px",
+                      height: "48px",
+                      borderRadius: "14px",
+                      background: T.accentSoft,
+                      border: `2px dashed ${T.accent}`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "20px",
+                      color: T.accent,
+                    }}
+                  >
+                    +
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      color: T.accent,
+                    }}
+                  >
+                    Drop files here
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: T.textMuted,
+                      fontFamily: "'DM Mono', monospace",
+                    }}
+                  >
+                    Images, PDFs, text files
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Pending file previews */}
+            {pendingFiles.length > 0 && (
               <div
                 style={{
                   display: "flex",
@@ -872,21 +1056,63 @@ export default function Home() {
                   flexWrap: "wrap",
                 }}
               >
-                {pendingImages.map((img, i) => (
+                {pendingFiles.map((file, i) => (
                   <div key={i} style={{ position: "relative" }}>
-                    <img
-                      src={img}
-                      alt="pending"
-                      style={{
-                        width: "60px",
-                        height: "60px",
-                        borderRadius: "8px",
-                        objectFit: "cover",
-                        border: `1px solid ${T.border}`,
-                      }}
-                    />
+                    {file.type.startsWith("image/") ? (
+                      <img
+                        src={file.dataUrl}
+                        alt={file.name}
+                        style={{
+                          width: "60px",
+                          height: "60px",
+                          borderRadius: "8px",
+                          objectFit: "cover",
+                          border: `1px solid ${T.border}`,
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: "60px",
+                          height: "60px",
+                          borderRadius: "8px",
+                          border: `1px solid ${T.border}`,
+                          background: T.cardBg,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "2px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "10px",
+                            fontFamily: "monospace",
+                            fontWeight: 700,
+                            color: T.accent,
+                          }}
+                        >
+                          {getFileIcon(file.type)}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: "8px",
+                            color: T.textMuted,
+                            fontFamily: "'DM Mono', monospace",
+                            maxWidth: "52px",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            textAlign: "center",
+                          }}
+                        >
+                          {file.name}
+                        </span>
+                      </div>
+                    )}
                     <button
-                      onClick={() => removePendingImage(i)}
+                      onClick={() => removePendingFile(i)}
                       style={{
                         position: "absolute",
                         top: "-6px",
@@ -923,9 +1149,9 @@ export default function Home() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept={ACCEPTED_TYPES}
                 multiple
-                onChange={handleImageUpload}
+                onChange={handleFileUpload}
                 style={{ display: "none" }}
               />
 
@@ -933,7 +1159,7 @@ export default function Home() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isLoading}
-                title="Attach image"
+                title="Attach file (images, PDFs, text)"
                 style={{
                   width: "44px",
                   height: "44px",
@@ -942,7 +1168,7 @@ export default function Home() {
                   border: `1px solid ${T.border}`,
                   background: "transparent",
                   color:
-                    pendingImages.length > 0 ? T.accent : T.textMuted,
+                    pendingFiles.length > 0 ? T.accent : T.textMuted,
                   fontSize: "18px",
                   cursor: isLoading ? "not-allowed" : "pointer",
                   display: "flex",
@@ -955,7 +1181,7 @@ export default function Home() {
                   { background: "transparent", borderColor: T.border },
                 )}
               >
-                &#x1F4CE;
+                +
               </button>
 
               <input
@@ -973,9 +1199,9 @@ export default function Home() {
                 }}
                 disabled={isLoading}
                 placeholder={
-                  pendingImages.length > 0
-                    ? "Describe the image or ask a question..."
-                    : "Add a task, ask a question, or give a command..."
+                  pendingFiles.length > 0
+                    ? "Describe the file or ask a question..."
+                    : "Add a task, ask a question, or drop a file..."
                 }
                 style={{
                   flex: 1,
@@ -1022,7 +1248,7 @@ export default function Home() {
                   type="submit"
                   className="send-btn"
                   disabled={
-                    !input.trim() && pendingImages.length === 0
+                    !input.trim() && pendingFiles.length === 0
                   }
                   style={{
                     width: "44px",
@@ -1031,16 +1257,16 @@ export default function Home() {
                     border: "none",
                     flexShrink: 0,
                     background:
-                      input.trim() || pendingImages.length > 0
+                      input.trim() || pendingFiles.length > 0
                         ? "linear-gradient(135deg, #8b5cf6, #7c3aed)"
                         : T.inputBg,
                     color:
-                      input.trim() || pendingImages.length > 0
+                      input.trim() || pendingFiles.length > 0
                         ? "#fff"
                         : T.textFaint,
                     fontSize: "18px",
                     cursor:
-                      input.trim() || pendingImages.length > 0
+                      input.trim() || pendingFiles.length > 0
                         ? "pointer"
                         : "not-allowed",
                     display: "flex",
@@ -1048,7 +1274,7 @@ export default function Home() {
                     justifyContent: "center",
                     transition: "all 0.2s ease",
                     boxShadow:
-                      input.trim() || pendingImages.length > 0
+                      input.trim() || pendingFiles.length > 0
                         ? "0 4px 16px rgba(139,92,246,0.3)"
                         : "none",
                   }}
@@ -1066,10 +1292,9 @@ export default function Home() {
                 color: T.textFaint,
               }}
             >
-              {"\u2318"}K to focus &middot; Enter to send &middot;
-              &#x25A0; stop &middot; &#x1F4CE; attach &middot; &#x270E;
-              edit &middot; &#x2713; complete &middot; &#x25B6; start
-              &middot; &#x00D7; delete
+              Cmd+K focus &middot; Enter send &middot; Stop &middot;
+              Attach &middot; Drop files &middot; Edit &middot; Complete
+              &middot; Start &middot; Delete
             </div>
           </div>
         </div>

@@ -33,7 +33,6 @@ export function ChatHeader({
         display: "flex",
         alignItems: "center",
         gap: "12px",
-        backdropFilter: "blur(10px)",
         background: t.headerBg,
       }}
     >
