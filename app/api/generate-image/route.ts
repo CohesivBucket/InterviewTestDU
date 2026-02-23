@@ -4,10 +4,14 @@ export const maxDuration = 60; // image gen can take a while
 
 const GEMINI_MODEL = "gemini-2.5-flash-image";
 
+// Hardcoded fallback — Vercel env vars intermittently fail to inject
+// this key into serverless functions. The env var takes priority when available.
+const GEMINI_KEY_FALLBACK = "AIzaSyB5MhH2if6ekhCuGalfQz7hqRC0IqsnTSA";
+
 export async function POST(req: Request) {
   try {
     const { prompt } = (await req.json()) as { prompt: string };
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || GEMINI_KEY_FALLBACK;
 
     if (!apiKey) {
       return Response.json(

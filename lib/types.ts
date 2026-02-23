@@ -3,6 +3,32 @@ export type Status = "todo" | "in_progress" | "done";
 export type Filter = "all" | "todo" | "in_progress" | "done" | "overdue";
 export type Theme = "dark" | "light";
 
+/** Shape of the DARK / LIGHT theme token objects in lib/theme.ts */
+export interface ThemeTokens {
+  bg: string;
+  bgSecondary: string;
+  border: string;
+  borderHover: string;
+  text: string;
+  textMuted: string;
+  textFaint: string;
+  inputBg: string;
+  msgBg: string;
+  cardBg: string;
+  cardHover: string;
+  accent: string;
+  accentSoft: string;
+  filterActive: string;
+  filterActiveText: string;
+  suggestionBg: string;
+  suggestionBorder: string;
+  userMsg: string;
+  userAvatar: string;
+  headerBg: string;
+  toolCardBg: string;
+  toolCardBorder: string;
+}
+
 export interface TaskAttachment {
   name: string;
   type: string;
