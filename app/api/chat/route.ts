@@ -34,6 +34,7 @@ ${taskSummary}
 
 ## Capabilities
 You have tools to CREATE, READ, UPDATE, and DELETE tasks in a real database.
+You can also GENERATE IMAGES using AI (powered by Google Gemini) — use the generate_image tool when users want to create, draw, design, or visualize anything.
 Always use your tools — never pretend to create or delete tasks without calling the function.
 
 ## Response Style
@@ -220,6 +221,35 @@ export async function POST(req: Request) {
           const all = await db.getAllTasks();
           for (const task of all) await db.deleteTask(task.id);
           return { success: true as const, deleted_count: all.length };
+        },
+      }),
+
+      generate_image: tool({
+        description:
+          "Generate an image using AI (Gemini). Use when the user asks to create, draw, design, or generate any kind of image, illustration, logo, diagram, or visual content.",
+        inputSchema: z.object({
+          prompt: z
+            .string()
+            .describe(
+              "Detailed description of the image to generate. Be specific about style, colors, composition, and subject matter."
+            ),
+        }),
+        execute: async ({ prompt }) => {
+          // Return a lightweight result — the ToolCard fetches the actual image client-side
+          // This avoids sending 1MB+ base64 back through the LLM context
+          const hasKey = !!process.env.GEMINI_API_KEY;
+          if (!hasKey) {
+            return {
+              success: false as const,
+              error: "Image generation not configured",
+            };
+          }
+          return {
+            success: true as const,
+            prompt,
+            status: "ready" as const,
+            message: `Image generation initiated for: "${prompt}". The image is being rendered in the chat.`,
+          };
         },
       }),
     },

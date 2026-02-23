@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect, useCallback } from "react";
 import type { Task } from "@/lib/types";
 import {
   DARK,
@@ -378,6 +379,16 @@ export function ToolCard({
     );
   }
 
+  // generate_image
+  if (toolName === "generate_image" && isSuccess && output?.status === "ready") {
+    return (
+      <ImageGenCard
+        prompt={String(output?.prompt ?? "")}
+        theme={theme}
+      />
+    );
+  }
+
   // Error fallback
   if (isError) {
     return (
@@ -438,5 +449,308 @@ export function ToolCard({
     >
       {toolName}: {input ? JSON.stringify(input) : "done"}
     </div>
+  );
+}
+
+// ─── Image generation card (fetches image client-side) ──────────────
+
+function ImageGenCard({
+  prompt,
+  theme,
+}: {
+  prompt: string;
+  theme: typeof DARK;
+}) {
+  const [state, setState] = useState<
+    "loading" | "done" | "error"
+  >("loading");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState(false);
+
+  const fetchImage = useCallback(async () => {
+    try {
+      setState("loading");
+      const res = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setError(data.error ?? "Failed to generate image");
+        setState("error");
+        return;
+      }
+      setImageUrl(data.imageDataUrl);
+      setState("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+      setState("error");
+    }
+  }, [prompt]);
+
+  useEffect(() => {
+    fetchImage();
+  }, [fetchImage]);
+
+  // Loading state
+  if (state === "loading") {
+    return (
+      <div
+        style={{
+          background: theme.toolCardBg,
+          border: `1px solid ${theme.toolCardBorder}`,
+          borderRadius: "12px",
+          padding: "16px",
+          marginBottom: "6px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            marginBottom: "10px",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "14px",
+              animation: "pulse 1.5s infinite",
+            }}
+          >
+            &#x1F3A8;
+          </span>
+          <span
+            style={{
+              fontSize: "9px",
+              fontFamily: "monospace",
+              letterSpacing: "0.1em",
+              color: "#c084fc",
+              fontWeight: 700,
+            }}
+          >
+            GENERATING IMAGE
+          </span>
+        </div>
+        <div
+          style={{
+            fontSize: "12px",
+            color: theme.textMuted,
+            fontStyle: "italic",
+            marginBottom: "10px",
+          }}
+        >
+          &ldquo;{prompt}&rdquo;
+        </div>
+        <div
+          style={{
+            background: `linear-gradient(135deg, rgba(168,85,247,0.08), rgba(59,130,246,0.08))`,
+            borderRadius: "10px",
+            height: "200px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              border: "3px solid rgba(168,85,247,0.3)",
+              borderTopColor: "#a855f7",
+              borderRadius: "50%",
+              animation: "spin 1s linear infinite",
+            }}
+          />
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      </div>
+    );
+  }
+
+  // Error state
+  if (state === "error") {
+    return (
+      <div
+        style={{
+          background: "rgba(248,113,113,0.06)",
+          border: "1px solid rgba(248,113,113,0.2)",
+          borderRadius: "12px",
+          padding: "14px",
+          marginBottom: "6px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "6px",
+            alignItems: "center",
+            marginBottom: "6px",
+          }}
+        >
+          <span style={{ fontSize: "12px" }}>&#x26A0;</span>
+          <span
+            style={{
+              fontSize: "9px",
+              fontFamily: "monospace",
+              letterSpacing: "0.1em",
+              color: "#f87171",
+              fontWeight: 700,
+            }}
+          >
+            IMAGE GENERATION FAILED
+          </span>
+        </div>
+        <div
+          style={{
+            fontSize: "12px",
+            color: "#f87171",
+            fontFamily: "monospace",
+          }}
+        >
+          {error}
+        </div>
+        <button
+          onClick={fetchImage}
+          style={{
+            marginTop: "8px",
+            fontSize: "11px",
+            fontFamily: "monospace",
+            color: theme.accent,
+            background: "none",
+            border: `1px solid ${theme.accent}`,
+            borderRadius: "6px",
+            padding: "4px 10px",
+            cursor: "pointer",
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  // Success — show the image
+  return (
+    <>
+      <div
+        style={{
+          background: theme.toolCardBg,
+          border: `1px solid ${theme.toolCardBorder}`,
+          borderRadius: "12px",
+          padding: "12px",
+          marginBottom: "6px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "6px",
+            alignItems: "center",
+            marginBottom: "8px",
+          }}
+        >
+          <span style={{ fontSize: "14px" }}>&#x1F3A8;</span>
+          <span
+            style={{
+              fontSize: "9px",
+              fontFamily: "monospace",
+              letterSpacing: "0.1em",
+              color: "#34d399",
+              fontWeight: 700,
+            }}
+          >
+            IMAGE GENERATED
+          </span>
+          <span
+            style={{
+              fontSize: "9px",
+              fontFamily: "monospace",
+              color: theme.textMuted,
+              marginLeft: "auto",
+            }}
+          >
+            Gemini AI
+          </span>
+        </div>
+        {imageUrl && (
+          <img
+            src={imageUrl}
+            alt={prompt}
+            onClick={() => setLightbox(true)}
+            style={{
+              width: "100%",
+              maxWidth: "512px",
+              borderRadius: "10px",
+              cursor: "pointer",
+              transition: "transform 0.2s",
+            }}
+            onMouseOver={(e) =>
+              ((e.target as HTMLElement).style.transform = "scale(1.01)")
+            }
+            onMouseOut={(e) =>
+              ((e.target as HTMLElement).style.transform = "scale(1)")
+            }
+          />
+        )}
+        <div
+          style={{
+            fontSize: "11px",
+            color: theme.textMuted,
+            fontStyle: "italic",
+            marginTop: "8px",
+            opacity: 0.7,
+          }}
+        >
+          &ldquo;{prompt}&rdquo;
+        </div>
+      </div>
+
+      {/* Lightbox */}
+      {lightbox && imageUrl && (
+        <div
+          onClick={() => setLightbox(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            background: "rgba(0,0,0,0.85)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={imageUrl}
+            alt={prompt}
+            style={{
+              maxWidth: "90vw",
+              maxHeight: "90vh",
+              borderRadius: "12px",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "20px",
+              right: "24px",
+              color: "white",
+              fontSize: "24px",
+              cursor: "pointer",
+              opacity: 0.7,
+            }}
+          >
+            &#x2715;
+          </div>
+        </div>
+      )}
+    </>
   );
 }
