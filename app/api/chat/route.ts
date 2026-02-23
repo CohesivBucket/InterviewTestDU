@@ -319,15 +319,9 @@ export async function POST(req: Request) {
             ),
         }),
         execute: async ({ prompt }) => {
-          // Return a lightweight result — the ToolCard fetches the actual image client-side
-          // This avoids sending 1MB+ base64 back through the LLM context
-          const hasKey = !!process.env.GEMINI_API_KEY;
-          if (!hasKey) {
-            return {
-              success: false as const,
-              error: "Image generation not configured",
-            };
-          }
+          // Always return success — the ToolCard fetches the actual image
+          // client-side from /api/generate-image (which checks the API key).
+          // This avoids sending 1MB+ base64 back through the LLM context.
           return {
             success: true as const,
             prompt,
